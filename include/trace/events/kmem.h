@@ -317,6 +317,107 @@ TRACE_EVENT(mm_page_alloc_extfrag,
 		__entry->change_ownership)
 );
 
+TRACE_EVENT(guest_free_page,
+	    TP_PROTO(struct page *page, unsigned int order),
+
+	TP_ARGS(page, order),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, order)
+	),
+
+	TP_fast_assign(
+		__entry->pfn            = page_to_pfn(page);
+		__entry->order          = order;
+	),
+
+	TP_printk("page=%p pfn=%lu number of pages=%d",
+		  pfn_to_page(__entry->pfn),
+		  __entry->pfn,
+		  (1 << __entry->order))
+);
+
+TRACE_EVENT(guest_alloc_page,
+	    TP_PROTO(struct page *page, unsigned int order),
+
+	TP_ARGS(page, order),
+
+	TP_STRUCT__entry(
+		__field(unsigned long,  pfn)
+		__field(unsigned int,   order)
+	),
+
+	TP_fast_assign(
+		__entry->pfn            = page_to_pfn(page);
+		__entry->order          = order;
+		),
+
+	TP_printk("page=%p pfn=%lu number of pages=%d",
+		  pfn_to_page(__entry->pfn),
+		  __entry->pfn,
+		  (1 << __entry->order))
+);
+
+TRACE_EVENT(guest_free_page_slowpath,
+	    TP_PROTO(unsigned long pfn, unsigned int pages),
+
+	TP_ARGS(pfn, pages),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, pages)
+	),
+
+	TP_fast_assign(
+		__entry->pfn            = pfn;
+		__entry->pages          = pages;
+	),
+
+	TP_printk("pfn=%lu number of pages=%u",
+		  __entry->pfn,
+		  __entry->pages)
+);
+
+TRACE_EVENT(guest_pfn_dump,
+	    TP_PROTO(char *type, unsigned long pfn, unsigned int pages),
+
+	TP_ARGS(type, pfn, pages),
+
+	TP_STRUCT__entry(
+		__field(char *, type)
+		__field(unsigned long, pfn)
+		__field(unsigned int, pages)
+	),
+
+	TP_fast_assign(
+		__entry->type		= type;
+		__entry->pfn            = pfn;
+		__entry->pages          = pages;
+		),
+
+	TP_printk("Type=%s pfn=%lu number of pages=%d",
+		  __entry->type,
+		  __entry->pfn,
+		  __entry->pages)
+);
+
+TRACE_EVENT(guest_str_dump,
+	    TP_PROTO(char *str),
+
+	TP_ARGS(str),
+
+	TP_STRUCT__entry(
+		__field(char *, str)
+	),
+
+	TP_fast_assign(
+		__entry->str		= str;
+		),
+
+	TP_printk("Debug=%s",
+		  __entry->str)
+);
 #endif /* _TRACE_KMEM_H */
 
 /* This part must be outside protection */
