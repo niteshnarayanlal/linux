@@ -4,6 +4,7 @@
 #include <linux/kvm_host.h>
 #include <linux/sort.h>
 #include <linux/kernel.h>
+#include <trace/events/kmem.h>
 
 #define MAX_FGPT_ENTRIES	1000
 #define HYPERLIST_THRESHOLD	500
@@ -48,12 +49,13 @@ static void empty_hyperlist(void)
 	}
 }
 
-static void make_hypercall(void)
+void make_hypercall(void)
 {
 	/*
 	 * Dummy function: Tobe filled later.
 	 */
 	empty_hyperlist();
+	trace_guest_str_dump("Hypercall to host...:");
 }
 
 static int sort_pfn(const void *a1, const void *b1)
@@ -70,13 +72,16 @@ static int sort_pfn(const void *a1, const void *b1)
 	return 0;
 }
 
-static int pack_hyperlist(void)
+int pack_hyperlist(void)
 {
 	int i = 0, j = 0;
 
 	while (i < MAX_FGPT_ENTRIES) {
 		if (hypervisor_pagelist[i].pfn != 0) {
 			if (i != j) {
+				trace_guest_pfn_dump("Packing Hyperlist",
+						     hypervisor_pagelist[i].pfn,
+						hypervisor_pagelist[i].pages);
 				hypervisor_pagelist[j].pfn =
 						hypervisor_pagelist[i].pfn;
 				hypervisor_pagelist[j].pages =
@@ -163,6 +168,9 @@ void copy_hyperlist(int hyper_idx)
 
 	free_page_obj = &get_cpu_var(kvm_pt)[0];
 	while (i < hyper_idx) {
+		trace_guest_pfn_dump("HyperList entry copied",
+				     hypervisor_pagelist[i].pfn,
+				     hypervisor_pagelist[i].pages);
 		free_page_obj[*idx].pfn = hypervisor_pagelist[i].pfn;
 		free_page_obj[*idx].pages = hypervisor_pagelist[i].pages;
 		*idx += 1;
@@ -203,11 +211,14 @@ void arch_free_page_slowpath(void)
 
 				pfn = head_pfn + alloc_pages;
 				prev_free = false;
+				trace_guest_pfn_dump("Compound",
+						     head_pfn, alloc_pages);
 				continue;
 			}
 			if (page_ref_count(p)) {
 				pfn++;
 				prev_free = false;
+				trace_guest_pfn_dump("Single", pfn, 1);
 				continue;
 			}
 			/*
@@ -218,6 +229,9 @@ void arch_free_page_slowpath(void)
 				hyper_idx++;
 				hypervisor_pagelist[hyper_idx].pfn = pfn;
 				hypervisor_pagelist[hyper_idx].pages = 1;
+				trace_guest_free_page_slowpath(
+				hypervisor_pagelist[hyper_idx].pfn,
+				hypervisor_pagelist[hyper_idx].pages);
 				if (hyper_idx == MAX_FGPT_ENTRIES - 1) {
 					hyper_idx =  compress_hyperlist();
 					if (hyper_idx >=
@@ -261,6 +275,7 @@ void arch_alloc_page(struct page *page, int order)
 	do {
 		seq = read_seqbegin(&guest_page_lock);
 	} while (read_seqretry(&guest_page_lock, seq));
+	trace_guest_alloc_page(page, order);
 }
 
 void arch_free_page(struct page *page, int order)
@@ -276,6 +291,7 @@ void arch_free_page(struct page *page, int order)
 	 */
 	local_irq_save(flags);
 	free_page_obj = &get_cpu_var(kvm_pt)[0];
+	trace_guest_free_page(page, order);
 	free_page_obj[*free_page_idx].pfn = page_to_pfn(page);
 	free_page_obj[*free_page_idx].pages = 1 << order;
 	*free_page_idx += 1;
