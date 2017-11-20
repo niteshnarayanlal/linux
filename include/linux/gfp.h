@@ -454,6 +454,13 @@ static inline struct zonelist *node_zonelist(int nid, gfp_t flags)
 	return NODE_DATA(nid)->node_zonelists + gfp_zonelist(flags);
 }
 
+#ifdef	CONFIG_KVM_FREE_PAGE_HINTING
+#define HAVE_ARCH_ALLOC_PAGE
+#define HAVE_ARCH_FREE_PAGE
+void arch_free_page(struct page *page, int order);
+void arch_alloc_page(struct page *page, int order);
+#endif
+
 #ifndef HAVE_ARCH_FREE_PAGE
 static inline void arch_free_page(struct page *page, int order) { }
 #endif

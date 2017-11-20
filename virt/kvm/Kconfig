@@ -50,3 +50,9 @@ config KVM_COMPAT
 
 config HAVE_KVM_IRQ_BYPASS
        bool
+
+config KVM_FREE_PAGE_HINTING
+       def_bool y
+       depends on KVM
+       select VIRTIO
+       select VIRTIO_BALLOON
