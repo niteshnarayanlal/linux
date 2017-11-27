@@ -32,6 +32,7 @@
 #include <linux/mm.h>
 #include <linux/mount.h>
 #include <linux/magic.h>
+#include <linux/page_hinting.h>
 
 /*
  * Balloon device works in 4K page units.  So each page is pointed to by
@@ -53,8 +54,11 @@ static struct vfsmount *balloon_mnt;
 
 struct virtio_balloon {
 	struct virtio_device *vdev;
-	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq;
-
+#ifdef CONFIG_KVM_FREE_PAGE_HINTING
+	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *hinting_vq;
+#elif
+	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq_vq;
+#endif
 	/* The balloon servicing is delegated to a freezable workqueue. */
 	struct work_struct update_balloon_stats_work;
 	struct work_struct update_balloon_size_work;
@@ -94,6 +98,33 @@ static struct virtio_device_id id_table[] = {
 	{ VIRTIO_ID_BALLOON, VIRTIO_DEV_ANY_ID },
 	{ 0 },
 };
+
+#ifdef CONFIG_KVM_FREE_PAGE_HINTING
+static void tell_host_one_page(struct virtio_balloon *vb, struct virtqueue *vq,
+			       u64 gvaddr, int len)
+{
+	unsigned int id = VIRTQUEUE_DESC_ID_INIT;
+	u64 gpaddr = virt_to_phys((void *)gvaddr);
+
+	virtqueue_add_chain_desc(vq, gpaddr, len, &id, &id, 0);
+	virtqueue_add_chain(vq, id, 0, NULL, (void *)gpaddr, NULL);
+}
+
+void virtballoon_page_hinting(struct virtio_balloon *vb, int hyper_entries)
+{
+	u64 gvaddr = (u64)hypervisor_pagelist;
+
+	vb->num_pfns = hyper_entries;
+	tell_host_one_page(vb, vb->hinting_vq, gvaddr, hyper_entries);
+}
+
+static void hinting_ack(struct virtqueue *vq)
+{
+	struct virtio_balloon *vb = vq->vdev->priv;
+
+	wake_up(&vb->acked);
+}
+#endif
 
 static u32 page_to_balloon_pfn(struct page *page)
 {
@@ -404,22 +435,38 @@ static void update_balloon_size_func(struct work_struct *work)
 
 static int init_vqs(struct virtio_balloon *vb)
 {
-	struct virtqueue *vqs[3];
-	vq_callback_t *callbacks[] = { balloon_ack, balloon_ack, stats_request };
-	static const char * const names[] = { "inflate", "deflate", "stats" };
+	struct virtqueue *vqs[4];
+	vq_callback_t *callbacks[] = { balloon_ack, balloon_ack, stats_request,
+				       hinting_ack };
+	static const char * const names[] = { "inflate", "deflate", "stats",
+					      "hinting" };
 	int err, nvqs;
+	bool stats_vq_support, page_hinting_support;
 
 	/*
 	 * We expect two virtqueues: inflate and deflate, and
-	 * optionally stat.
+	 * optionally stat and hinting.
 	 */
-	nvqs = virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_STATS_VQ) ? 3 : 2;
+	stats_vq_support = virtio_has_feature(vb->vdev,
+					      VIRTIO_BALLOON_F_STATS_VQ);
+	page_hinting_support = virtio_has_feature(vb->vdev,
+						  VIRTIO_GUEST_PAGE_HINTING_VQ
+						  );
+	if (stats_vq_support && page_hinting_support)
+		nvqs = 4;
+	else if (stats_vq_support || page_hinting_support)
+		nvqs = 3;
+	else
+		nvqs = 2;
+
 	err = virtio_find_vqs(vb->vdev, nvqs, vqs, callbacks, names, NULL);
 	if (err)
 		return err;
 
 	vb->inflate_vq = vqs[0];
 	vb->deflate_vq = vqs[1];
+	if (page_hinting_support)
+		vb->hinting_vq = vqs[3];
 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_STATS_VQ)) {
 		struct scatterlist sg;
 		unsigned int num_stats;
@@ -581,6 +628,11 @@ static int virtballoon_probe(struct virtio_device *vdev)
 
 	virtio_device_ready(vdev);
 
+	if (virtio_has_feature(vb->vdev, VIRTIO_GUEST_PAGE_HINTING_VQ)) {
+		request_hypercall = (void *)&virtballoon_page_hinting;
+		balloon_ptr = vb;
+	}
+
 	if (towards_target(vb))
 		virtballoon_changed(vdev);
 	return 0;
@@ -669,6 +721,7 @@ static unsigned int features[] = {
 	VIRTIO_BALLOON_F_MUST_TELL_HOST,
 	VIRTIO_BALLOON_F_STATS_VQ,
 	VIRTIO_BALLOON_F_DEFLATE_ON_OOM,
+	VIRTIO_GUEST_PAGE_HINTING_VQ,
 };
 
 static struct virtio_driver virtio_balloon_driver = {
