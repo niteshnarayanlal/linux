@@ -6,6 +6,7 @@
 #include <linux/stddef.h>
 #include <linux/linkage.h>
 #include <linux/topology.h>
+#include <linux/page_hinting.h>
 
 struct vm_area_struct;
 
@@ -457,8 +458,19 @@ static inline struct zonelist *node_zonelist(int nid, gfp_t flags)
 #ifdef	CONFIG_KVM_FREE_PAGE_HINTING
 #define HAVE_ARCH_ALLOC_PAGE
 #define HAVE_ARCH_FREE_PAGE
-void arch_free_page(struct page *page, int order);
-void arch_alloc_page(struct page *page, int order);
+static inline void arch_alloc_page(struct page *page, int order)
+{
+	if (!static_branch_unlikely(&guest_page_hinting_key))
+		return;
+	guest_alloc_page(page, order);
+}
+
+static inline void arch_free_page(struct page *page, int order)
+{
+	if (!static_branch_unlikely(&guest_page_hinting_key))
+		return;
+	guest_free_page(page, order);
+}
 #endif
 
 #ifndef HAVE_ARCH_FREE_PAGE

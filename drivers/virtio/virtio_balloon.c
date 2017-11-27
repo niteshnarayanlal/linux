@@ -32,7 +32,6 @@
 #include <linux/mm.h>
 #include <linux/mount.h>
 #include <linux/magic.h>
-#include <linux/page_hinting.h>
 
 /*
  * Balloon device works in 4K page units.  So each page is pointed to by
@@ -123,6 +122,14 @@ static void hinting_ack(struct virtqueue *vq)
 	struct virtio_balloon *vb = vq->vdev->priv;
 
 	wake_up(&vb->acked);
+}
+
+static void enable_hinting(struct virtio_balloon *vb)
+{
+	guest_page_hinting_flag = 1;
+	static_branch_enable(&guest_page_hinting_key);
+	request_hypercall = (void *)&virtballoon_page_hinting;
+	balloon_ptr = vb;
 }
 #endif
 
@@ -628,10 +635,8 @@ static int virtballoon_probe(struct virtio_device *vdev)
 
 	virtio_device_ready(vdev);
 
-	if (virtio_has_feature(vb->vdev, VIRTIO_GUEST_PAGE_HINTING_VQ)) {
-		request_hypercall = (void *)&virtballoon_page_hinting;
-		balloon_ptr = vb;
-	}
+	if (virtio_has_feature(vb->vdev, VIRTIO_GUEST_PAGE_HINTING_VQ))
+		enable_hinting(vb);
 
 	if (towards_target(vb))
 		virtballoon_changed(vdev);
