@@ -5,8 +5,8 @@
 #include <linux/sort.h>
 #include <linux/kernel.h>
 #include <trace/events/kmem.h>
+#include <linux/page_hinting.h>
 
-#define MAX_FGPT_ENTRIES	1000
 #define HYPERLIST_THRESHOLD	500
 /*
  * struct kvm_free_pages - Tracks the pages which are freed by the guest.
@@ -21,22 +21,15 @@ struct kvm_free_pages {
 	unsigned int pages;
 };
 
-/*
- * hypervisor_pages - It is a dummy structure passed with the hypercall.
- * @pfn - page frame number for the page which is to be freed.
- * @pages - number of pages which are supposed to be freed.
- * A global array object is used to to hold the list of pfn and pages and is
- * passed as part of the hypercall.
- */
-struct hypervisor_pages {
-	unsigned long pfn;
-	unsigned int pages;
-};
-
 static __cacheline_aligned_in_smp DEFINE_SEQLOCK(guest_page_lock);
 DEFINE_PER_CPU(struct kvm_free_pages [MAX_FGPT_ENTRIES], kvm_pt);
 DEFINE_PER_CPU(int, kvm_pt_idx);
 struct hypervisor_pages hypervisor_pagelist[MAX_FGPT_ENTRIES];
+EXPORT_SYMBOL(hypervisor_pagelist);
+void (*request_hypercall)(void *, int);
+EXPORT_SYMBOL(request_hypercall);
+void *balloon_ptr;
+EXPORT_SYMBOL(balloon_ptr);
 
 static void empty_hyperlist(void)
 {
@@ -49,13 +42,11 @@ static void empty_hyperlist(void)
 	}
 }
 
-void make_hypercall(void)
+void hyperlist_ready(int entries)
 {
-	/*
-	 * Dummy function: Tobe filled later.
-	 */
-	empty_hyperlist();
 	trace_guest_str_dump("Hypercall to host...:");
+	request_hypercall(balloon_ptr, entries);
+	empty_hyperlist();
 }
 
 static int sort_pfn(const void *a1, const void *b1)
@@ -156,7 +147,7 @@ int compress_hyperlist(void)
 	if (merge_counter != 0)
 		ret = pack_hyperlist() - 1;
 	else
-		ret = MAX_FGPT_ENTRIES - 1;
+		ret = MAX_FGPT_ENTRIES;
 	return ret;
 }
 
@@ -227,16 +218,16 @@ void arch_free_page_slowpath(void)
 			 */
 			if (!prev_free) {
 				hyper_idx++;
-				hypervisor_pagelist[hyper_idx].pfn = pfn;
-				hypervisor_pagelist[hyper_idx].pages = 1;
 				trace_guest_free_page_slowpath(
 				hypervisor_pagelist[hyper_idx].pfn,
 				hypervisor_pagelist[hyper_idx].pages);
+				hypervisor_pagelist[hyper_idx].pfn = pfn;
+				hypervisor_pagelist[hyper_idx].pages = 1;
 				if (hyper_idx == MAX_FGPT_ENTRIES - 1) {
 					hyper_idx =  compress_hyperlist();
 					if (hyper_idx >=
 					    HYPERLIST_THRESHOLD) {
-						make_hypercall();
+						hyperlist_ready(hyper_idx);
 						hyper_idx = 0;
 					}
 				}
@@ -272,6 +263,7 @@ void arch_alloc_page(struct page *page, int order)
 	 * free pages is full and a hypercall will be made. Until complete free
 	 * page list is traversed no further allocaiton will be allowed.
 	 */
+
 	do {
 		seq = read_seqbegin(&guest_page_lock);
 	} while (read_seqretry(&guest_page_lock, seq));
