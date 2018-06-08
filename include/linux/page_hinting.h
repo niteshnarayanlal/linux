@@ -1,3 +1,4 @@
+#include <linux/poison.h>
 #define MAX_FGPT_ENTRIES	1000
 /*
  * hypervisor_pages - It is a dummy structure passed with the hypercall.
@@ -14,6 +15,7 @@ struct hypervisor_pages {
 extern struct hypervisor_pages hypervisor_pagelist[MAX_FGPT_ENTRIES];
 extern void (*request_hypercall)(void *, int);
 extern void *balloon_ptr;
+extern bool want_page_poisoning;
 
 extern struct static_key_false guest_page_hinting_key;
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
@@ -21,3 +23,10 @@ int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 extern int guest_page_hinting_flag;
 void guest_alloc_page(struct page *page, int order);
 void guest_free_page(struct page *page, int order);
+
+static inline void disable_page_poisoning(void)
+{
+#ifdef CONFIG_PAGE_POISONING
+	want_page_poisoning = 0;
+#endif
+}

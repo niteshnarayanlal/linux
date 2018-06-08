@@ -302,6 +302,7 @@ void guest_free_page(struct page *page, int order)
 	 * process context causing unwanted overwrites. This will be replaced
 	 * with a better solution to prevent such race conditions.
 	 */
+	disable_page_poisoning();
 	local_irq_save(flags);
 	free_page_obj = &get_cpu_var(kvm_pt)[0];
 	trace_guest_free_page(page, order);
