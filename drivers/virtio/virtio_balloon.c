@@ -128,6 +128,7 @@ static void enable_hinting(struct virtio_balloon *vb)
 {
 	guest_page_hinting_flag = 1;
 	static_branch_enable(&guest_page_hinting_key);
+	INIT_WORK(&hinting_work, init_hinting_wq);
 	request_hypercall = (void *)&virtballoon_page_hinting;
 	balloon_ptr = vb;
 }

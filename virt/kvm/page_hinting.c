@@ -23,9 +23,9 @@ struct kvm_free_pages {
 	int zonenum;
 };
 
-static __cacheline_aligned_in_smp DEFINE_SEQLOCK(guest_page_lock);
 DEFINE_PER_CPU(struct kvm_free_pages [MAX_FGPT_ENTRIES], kvm_pt);
 DEFINE_PER_CPU(int, kvm_pt_idx);
+DEFINE_PER_CPU(int, counter);
 struct hypervisor_pages hypervisor_pagelist[MAX_FGPT_ENTRIES];
 EXPORT_SYMBOL(hypervisor_pagelist);
 void (*request_hypercall)(void *, int);
@@ -38,6 +38,8 @@ static DEFINE_MUTEX(hinting_mutex);
 static DEFINE_MUTEX(irq_mutex);
 int guest_page_hinting_flag;
 EXPORT_SYMBOL(guest_page_hinting_flag);
+struct work_struct hinting_work;
+EXPORT_SYMBOL(hinting_work);
 
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp,
@@ -93,7 +95,7 @@ int pack_hyperlist(void)
 {
 	int i = 0, j = 0;
 
-	while (i < MAX_FGPT_ENTRIES) {
+	while (i < MAX_FGPT_ENTRIES - 1) {
 		if (hypervisor_pagelist[i].pfn != 0) {
 			if (i != j) {
 				trace_guest_pfn_dump("Packing Hyperlist",
@@ -211,92 +213,6 @@ static int sort_zonenum(const void *a1, const void *b1)
 
         return 0;
 }
-int pack_percpulist(void)
-{
-	int i = 0, j = 0;
-
-	struct kvm_free_pages *free_page_obj = &get_cpu_var(kvm_pt)[0];
-	while (i < MAX_FGPT_ENTRIES) {
-		if (free_page_obj[i].pfn != 0) {
-			if (i != j) {
-				trace_guest_pfn_dump("Packing Hyperlist",
-						     free_page_obj[i].pfn,
-						free_page_obj[i].pages);
-				free_page_obj[j].pfn =
-						free_page_obj[i].pfn;
-				free_page_obj[j].pages =
-						free_page_obj[i].pages;
-			}
-			j++;
-		}
-		i++;
-	}
-	i = j;
-	while (j < MAX_FGPT_ENTRIES) {
-		free_page_obj[j].pfn = 0;
-		free_page_obj[j].pages = 0;
-		j++;
-	}
-	return i;
-}
-int compress_percpulist(void)
-{
-	int i = 0, j = 1, merge_counter = 0, ret = 0;
-	struct kvm_free_pages *free_page_obj = &get_cpu_var(kvm_pt)[0];
-
-	while (i < MAX_FGPT_ENTRIES && j < MAX_FGPT_ENTRIES) {
-		unsigned long pfni = free_page_obj[i].pfn;
-		unsigned int pagesi = free_page_obj[i].pages;
-		unsigned long pfnj = free_page_obj[j].pfn;
-		unsigned int pagesj = free_page_obj[j].pages;
-
-		if (pfnj <= pfni) {
-			if (((pfnj + pagesj - 1) <= (pfni + pagesi - 1)) &&
-			    ((pfnj + pagesj - 1) >= (pfni - 1))) {
-				free_page_obj[i].pfn = pfnj;
-				free_page_obj[i].pages += pfni - pfnj;
-				free_page_obj[j].pfn = 0;
-				free_page_obj[j].pages = 0;
-				j++;
-				merge_counter++;
-				continue;
-			} else if ((pfnj + pagesj - 1) > (pfni + pagesi - 1)) {
-				free_page_obj[i].pfn = pfnj;
-				free_page_obj[i].pages = pagesj;
-				free_page_obj[j].pfn = 0;
-				free_page_obj[j].pages = 0;
-				j++;
-				merge_counter++;
-				continue;
-			}
-		} else if (pfnj > pfni) {
-			if ((pfnj + pagesj - 1) > (pfni + pagesi - 1) &&
-			    (pfnj <= pfni + pagesi)) {
-				free_page_obj[i].pages +=
-						(pfnj + pagesj - 1) -
-						(pfni + pagesi - 1);
-				free_page_obj[j].pfn = 0;
-				free_page_obj[j].pages = 0;
-				j++;
-				merge_counter++;
-				continue;
-			} else if ((pfnj + pagesj - 1) <= (pfni + pagesi - 1)) {
-				free_page_obj[j].pfn = 0;
-				free_page_obj[j].pages = 0;
-				j++;
-				merge_counter++;
-				continue;
-			}
-		}
-		i = j;
-		j++;
-	}
-	if (merge_counter != 0)
-		ret = pack_percpulist() - 1;
-	else
-		ret = MAX_FGPT_ENTRIES;
-	return ret;
-}
 
 /*
  * arch_free_page_slowpath() - This function adds the guest free page entries
@@ -307,25 +223,31 @@ void arch_free_page_slowpath(void)
 {
 	int idx = 0;
 	int *kvm_idx = &get_cpu_var(kvm_pt_idx);
+	int *cnt = &get_cpu_var(counter);
 	int zonenum_prev = -1, zonenum_cur = -1;
 	struct kvm_free_pages *free_page_obj = &get_cpu_var(kvm_pt)[0];
 	int hyper_idx = -1;
 	int ret = 0;
 	int i = 0;
-#if 0
-	printk("\nBefore operation list\n");
+
+//	printk("\nBefore operation list\n");
 	while (i < MAX_FGPT_ENTRIES) {
-		printk("\nidx:%d pfn:%lu pages:%d\n", i, free_page_obj[i].pfn, free_page_obj[i].pages);
+		if (free_page_obj[i].pfn == 0) {
+			printk("\n!!!!!!!!!!!!!!!!!!!!!!!!!!WARNING!!!!!!!!!!!!!!\n");
+			printk("\n%d:%s counter:%d idx:%d pfn:%lu pages:%d cpu:%d\n", __LINE__, __func__, *cnt, i, free_page_obj[i].pfn, free_page_obj[idx].pages, smp_processor_id());
+		}
 		i++;
 	}
-#endif
 	sort(free_page_obj, MAX_FGPT_ENTRIES,
 	     sizeof(struct kvm_free_pages), sort_zonenum, NULL);
 #if 0
 	i = 0;
-	printk("\nAfter operation list\n");
+	printk("\nAfter sort operation list\n");
 	while (i < MAX_FGPT_ENTRIES) {
-		printk("\nidx:%d pfn:%lu pages:%d\n", i, free_page_obj[i].pfn, free_page_obj[i].pages);
+		if (free_page_obj[i].pfn == 0) {
+			printk("\n!!!!!!!!!!!!!!!!!!!!!!!!!!WARNING!!!!!!!!!!!!!!\n");
+			printk("\nidx:%d pfn:%lu pages:%d\n", i, free_page_obj[i].pfn, free_page_obj[idx].pages);
+		}
 		i++;
 	}
 #endif
@@ -336,25 +258,26 @@ void arch_free_page_slowpath(void)
 		bool prev_free = false;
 		struct zone *zone_cur, *zone_prev;
 
+		printk("\n%d:%s counter:%d idx:%d pfn:%lu pfn_end:%lu cpu:%d \n", __LINE__, __func__, *cnt, idx, pfn, pfn_end, smp_processor_id());
 		if (zonenum_prev == -1) {
 			zonenum_prev = free_page_obj[idx].zonenum;
 		   	zone_prev = page_zone(pfn_to_page(pfn));
-			printk("\nAcquiring lock for the first entry which belongs to zone:%d\n", zonenum_prev);
+//			printk("\nAcquiring lock for the first entry which belongs to zone:%d\n", zonenum_prev);
 			spin_lock(&zone_prev->lock);
 		}
 		zonenum_cur = free_page_obj[idx].zonenum;
 		zone_cur = page_zone(pfn_to_page(pfn));
 		if (zonenum_prev != zonenum_cur) {
 			//unlock previous zone
-			printk("\nReleasing lock for :%d zone\n", zonenum_prev);
+//			printk("\nReleasing lock for :%d zone\n", zonenum_prev);
 			spin_unlock(&zone_prev->lock);
 			//change zone_next and zone value
 			zonenum_prev = zonenum_cur;
 			//lock current zone
-			printk("\nAcquiring lock for :%d zone\n", zonenum_cur);
+//			printk("\nAcquiring lock for :%d zone\n", zonenum_cur);
 			spin_lock(&zone_cur->lock);
 		}
-		while (pfn <= pfn_end) {
+		while (pfn <= pfn_end && pfn!= 0) {
 			struct page *p = pfn_to_page(pfn);
 
                         if (PageCompound(p)) {
@@ -383,30 +306,18 @@ void arch_free_page_slowpath(void)
 					printk("pfn:%lu pfn from page:%lu", pfn, page_to_pfn(p));	
 					ret = __isolate_free_page(p, page_order(p));
 					if (!ret) {
-						printk("\nIsolation failure for pfn:%lu\n", pfn);
-						return;
+						printk("\nidx:%d Isolation failure for pfn:%lu\n", idx, pfn);
 					} else {
-						printk("\nIsolation successful for pfn:%lu\n", pfn);
+//						printk("\nidx:%d Isolation successful for pfn:%lu\n", idx, pfn);
 						hyper_idx++;
 						hypervisor_pagelist[hyper_idx].pfn = pfn;
 						hypervisor_pagelist[hyper_idx].pages = page_order(p);
 						hyperlist_ready(1);
 					}
 			//		trace_guest_free_page_slowpath(head_pfn,
-			//				pages);
-					/*
-					 * If the next contiguous page is free, it can
-					 * be added to this same entry.
-					 */
-//					prev_free = true;
 					pfn = pfn + page_order(p);
+					continue;
 			}
-//			} else if(prev_free && PageBuddy(pfn_to_page(pfn))) {
-				/*
-				 * Multiple adjacent free pages
-				 */
-//				hypervisor_pagelist[hyper_idx].pages++;
-			//}
 			pfn++;
 		}
 		free_page_obj[idx].pfn = 0;
@@ -414,10 +325,11 @@ void arch_free_page_slowpath(void)
 		idx++;
 		if (idx == MAX_FGPT_ENTRIES) {
 			//Release the last entries zone lock befoe leaving
-			printk("\nReleasing lock for the last entry\n");
+//			printk("\nReleasing lock for the last entry\n");
 			spin_unlock(&zone_cur->lock);
 		}
 	}
+
 	*kvm_idx = 0;
 	put_cpu_var(kvm_pt);
 	put_cpu_var(kvm_pt_idx);
@@ -425,43 +337,49 @@ void arch_free_page_slowpath(void)
 
 void guest_alloc_page(struct page *page, int order)
 {
-	unsigned int seq;
+}
 
-	/*
-	 * arch_free_page will acquire the lock once the list carrying guest
-	 * free pages is full and a hypercall will be made. Until complete free
-	 * page list is traversed no further allocaiton will be allowed.
-	 */
-
-	do {
-		seq = read_seqbegin(&guest_page_lock);
-	} while (read_seqretry(&guest_page_lock, seq));
-	trace_guest_alloc_page(page, order);
+void init_hinting_wq(struct work_struct *work)
+{
+	int *free_page_idx = &get_cpu_var(kvm_pt_idx);
+	int *cnt = &get_cpu_var(counter);
+	
+	printk("\n%d:%s counter:%d kvm_idx:%d cpu_id:%d\n", __LINE__, __func__, *cnt, *free_page_idx, smp_processor_id());
+	arch_free_page_slowpath();
 }
 
 void guest_free_page(struct page *page, int order)
 {
-	int *free_page_idx = &get_cpu_var(kvm_pt_idx);
-	struct kvm_free_pages *free_page_obj = &get_cpu_var(kvm_pt)[0];
 	unsigned long flags;
 	/*
 	 * use of global variables may trigger a race condition between irq and
 	 * process context causing unwanted overwrites. This will be replaced
 	 * with a better solution to prevent such race conditions.
 	 */
-//	mutex_lock(&irq_mutex);
-	disable_page_poisoning();
-	local_irq_save(flags);
-	free_page_obj = &get_cpu_var(kvm_pt)[0];
-	trace_guest_free_page(page, order);
-	free_page_obj[*free_page_idx].pfn = page_to_pfn(page);
-	free_page_obj[*free_page_idx].zonenum = page_zonenum(page);
-	free_page_obj[*free_page_idx].pages = 1 << order;
-	*free_page_idx += 1;
-	if (*free_page_idx == MAX_FGPT_ENTRIES)
-		arch_free_page_slowpath();
-	put_cpu_var(kvm_pt);
-	put_cpu_var(kvm_pt_idx);
-//	mutex_unlock(&irq_mutex);
-	local_irq_restore(flags);
+
+	int *free_page_idx = &get_cpu_var(kvm_pt_idx);
+	int *cnt = &get_cpu_var(counter);
+	struct kvm_free_pages *free_page_obj = &get_cpu_var(kvm_pt)[0];
+	int cpu_id = 0;
+
+	if (*free_page_idx != MAX_FGPT_ENTRIES) {
+		disable_page_poisoning();
+		local_irq_save(flags);
+		free_page_obj = &get_cpu_var(kvm_pt)[0];
+		trace_guest_free_page(page, order);
+		free_page_obj[*free_page_idx].pfn = page_to_pfn(page);
+		free_page_obj[*free_page_idx].zonenum = page_zonenum(page);
+		free_page_obj[*free_page_idx].pages = 1 << order;
+		*free_page_idx += 1;
+		if (*free_page_idx == MAX_FGPT_ENTRIES) {
+			*cnt += 1;
+			cpu_id = smp_processor_id();
+			printk("\n%d:%s counter:%d cpu_id:%d", __LINE__, __func__, *cnt, cpu_id);
+			queue_work_on(cpu_id, system_wq, &hinting_work);
+			put_cpu_var(counter);
+		}
+		put_cpu_var(kvm_pt);
+		put_cpu_var(kvm_pt_idx);
+		local_irq_restore(flags);
+	}
 }

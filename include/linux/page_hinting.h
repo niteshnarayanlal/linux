@@ -16,6 +16,7 @@ extern struct hypervisor_pages hypervisor_pagelist[MAX_FGPT_ENTRIES];
 extern void (*request_hypercall)(void *, int);
 extern void *balloon_ptr;
 extern bool want_page_poisoning;
+extern struct work_struct hinting_work;
 
 extern struct static_key_false guest_page_hinting_key;
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
@@ -23,7 +24,7 @@ int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 extern int guest_page_hinting_flag;
 void guest_alloc_page(struct page *page, int order);
 void guest_free_page(struct page *page, int order);
-
+void init_hinting_wq(struct work_struct *work);
 static inline void disable_page_poisoning(void)
 {
 #ifdef CONFIG_PAGE_POISONING
