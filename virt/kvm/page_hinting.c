@@ -163,6 +163,7 @@ void guest_free_page(struct page *page, int order)
 	free_page_obj = this_cpu_ptr(kvm_pt);
 
 	if (*free_page_idx != MAX_FGPT_ENTRIES) {
+		disable_page_poisoning();
 		trace_guest_free_page(page, order);
 		free_page_obj[*free_page_idx].pfn = page_to_pfn(page);
 		free_page_obj[*free_page_idx].zonenum = page_zonenum(page);

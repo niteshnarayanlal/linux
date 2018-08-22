@@ -16,9 +16,18 @@ struct hypervisor_pages {
 extern struct smp_hotplug_thread hinting_threads;
 extern struct hypervisor_pages hypervisor_pagelist[MAX_FGPT_ENTRIES];
 
+extern int guest_page_hinting_flag;
 extern struct static_key_false guest_page_hinting_key;
+extern bool want_page_poisoning;
+
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp, loff_t *ppos);
-extern int guest_page_hinting_flag;
 void guest_free_page(struct page *page, int order);
 extern int __isolate_free_page(struct page *page, unsigned int order);
+
+static inline void disable_page_poisoning(void)
+{
+#ifdef CONFIG_PAGE_POISONING
+	want_page_poisoning = 0;
+#endif
+}
