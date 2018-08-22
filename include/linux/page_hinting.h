@@ -21,3 +21,4 @@ int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp, loff_t *ppos);
 extern int guest_page_hinting_flag;
 void guest_free_page(struct page *page, int order);
+extern int __isolate_free_page(struct page *page, unsigned int order);
