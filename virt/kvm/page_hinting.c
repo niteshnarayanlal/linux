@@ -1,7 +1,11 @@
 #include <linux/gfp.h>
 #include <linux/mm.h>
+#include <linux/page_ref.h>
 #include <linux/kvm_host.h>
+#include <linux/sort.h>
 #include <linux/kernel.h>
+#include <linux/log2.h>
+#include <trace/events/kmem.h>
 
 /*
  * struct kvm_free_pages - Tracks the pages which are freed by the guest.
@@ -55,6 +59,7 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 {
 	int i = 0;
 
+	trace_guest_str_dump("Hypercall to host...:");
 	while (i < entries) {
 		struct page *p = pfn_to_page(guest_isolated_pages[i].pfn);
 
@@ -158,7 +163,7 @@ void guest_free_page(struct page *page, int order)
 	free_page_obj = this_cpu_ptr(kvm_pt);
 
 	if (*free_page_idx != MAX_FGPT_ENTRIES) {
-		disable_page_poisoning();
+		trace_guest_free_page(page, order);
 		free_page_obj[*free_page_idx].pfn = page_to_pfn(page);
 		free_page_obj[*free_page_idx].zonenum = page_zonenum(page);
 		free_page_obj[*free_page_idx].order = order;
