@@ -18,11 +18,16 @@ extern struct hypervisor_pages hypervisor_pagelist[MAX_FGPT_ENTRIES];
 
 extern int guest_page_hinting_flag;
 extern struct static_key_false guest_page_hinting_key;
+extern unsigned int isolated_page_counter, failed_isolation_counter;
 extern bool want_page_poisoning;
 
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp, loff_t *ppos);
 void guest_free_page(struct page *page, int order);
+int count_isolated_pages(struct ctl_table *table, int write,
+			 void __user *buffer, size_t *lenp, loff_t *ppos);
+int count_failed_isolations(struct ctl_table *table, int write,
+			    void __user *buffer, size_t *lenp, loff_t *ppos);
 extern int __isolate_free_page(struct page *page, unsigned int order);
 
 static inline void disable_page_poisoning(void)

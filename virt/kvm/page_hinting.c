@@ -35,7 +35,30 @@ EXPORT_SYMBOL(guest_page_hinting_key);
 static DEFINE_MUTEX(hinting_mutex);
 int guest_page_hinting_flag;
 EXPORT_SYMBOL(guest_page_hinting_flag);
+unsigned int isolated_page_counter, failed_isolation_counter;
+EXPORT_SYMBOL(isolated_page_counter);
+EXPORT_SYMBOL(failed_isolation_counter);
 static DEFINE_PER_CPU(struct task_struct *, hinting_task);
+
+int count_isolated_pages(struct ctl_table *table, int write,
+			 void __user *buffer, size_t *lenp,
+			 loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	return ret;
+}
+
+int count_failed_isolations(struct ctl_table *table, int write,
+			    void __user *buffer, size_t *lenp,
+			    loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	return ret;
+}
 
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp,
@@ -93,7 +116,9 @@ static void hinting_fn(unsigned int cpu)
 			if (page_private(p) == free_page_obj[idx].order) {
 				ret = __isolate_free_page(p, page_private(p));
 				if (!ret) {
+					failed_isolation_counter++;
 				} else {
+					isolated_page_counter++;
 					guest_isolated_pages[*hyp_idx].pfn =
 							pfn;
 					guest_isolated_pages[*hyp_idx].pages =

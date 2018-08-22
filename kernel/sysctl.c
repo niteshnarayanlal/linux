@@ -1672,6 +1672,20 @@ static struct ctl_table vm_table[] = {
 		.mode		= 0644,
 		.proc_handler   = guest_page_hinting_sysctl,
 	},
+	{
+		.procname	= "isolated-pages",
+		.data		= &isolated_page_counter,
+		.maxlen		= sizeof(isolated_page_counter),
+		.mode		= 0644,
+		.proc_handler   = count_isolated_pages,
+	},
+	{
+		.procname	= "failed-isolations",
+		.data		= &failed_isolation_counter,
+		.maxlen		= sizeof(failed_isolation_counter),
+		.mode		= 0644,
+		.proc_handler   = count_failed_isolations,
+	},
 #endif
 	{ }
 };
