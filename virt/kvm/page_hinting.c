@@ -83,6 +83,7 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 	int i = 0;
 
 	trace_guest_str_dump("Hypercall to host...:");
+	request_hypercall(balloon_ptr, (u64)&guest_isolated_pages[0], entries);
 	while (i < entries) {
 		struct page *p = pfn_to_page(guest_isolated_pages[i].pfn);
 

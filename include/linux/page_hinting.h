@@ -20,6 +20,8 @@ extern int guest_page_hinting_flag;
 extern struct static_key_false guest_page_hinting_key;
 extern unsigned int isolated_page_counter, failed_isolation_counter;
 extern bool want_page_poisoning;
+extern void (*request_hypercall)(void *, u64, int);
+extern void *balloon_ptr;
 
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp, loff_t *ppos);
