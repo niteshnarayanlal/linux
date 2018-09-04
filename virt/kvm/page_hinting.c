@@ -117,7 +117,7 @@ static void hinting_fn(unsigned int cpu)
 		unlocked = 0;
 
 		if (PageBuddy(p)) {
-			if (page_private(p) <= free_page_obj[idx].order) {
+			if (page_private(p) == free_page_obj[idx].order) {
 				ret = __isolate_free_page(p, page_private(p));
 				if (!ret) {
 					failed_isolation_counter++;
@@ -127,6 +127,7 @@ static void hinting_fn(unsigned int cpu)
 							pfn;
 					guest_isolated_pages[hyp_idx].pages =
 							1 << page_private(p);
+					trace_guest_free_page_slowpath(pfn, page_private(p));
 					hyp_idx += 1;
 				}
 			}

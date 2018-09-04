@@ -358,23 +358,23 @@ TRACE_EVENT(guest_alloc_page,
 );
 
 TRACE_EVENT(guest_free_page_slowpath,
-	    TP_PROTO(unsigned long pfn, unsigned int pages),
+	    TP_PROTO(unsigned long pfn, unsigned int order),
 
-	TP_ARGS(pfn, pages),
+	TP_ARGS(pfn, order),
 
 	TP_STRUCT__entry(
 		__field(unsigned long, pfn)
-		__field(unsigned int, pages)
+		__field(unsigned int, order)
 	),
 
 	TP_fast_assign(
 		__entry->pfn            = pfn;
-		__entry->pages          = pages;
+		__entry->order          = order;
 	),
 
-	TP_printk("pfn=%lu number of pages=%u",
+	TP_printk("Isolation request for:pfn=%lu number of order=%u",
 		  __entry->pfn,
-		  __entry->pages)
+		  __entry->order)
 );
 
 TRACE_EVENT(guest_pfn_dump,
