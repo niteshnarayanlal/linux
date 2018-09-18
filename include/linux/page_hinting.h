@@ -1,6 +1,6 @@
 #include <linux/smpboot.h>
 
-#define MAX_FGPT_ENTRIES	1000
+#define MAX_FGPT_ENTRIES	100000
 /*
  * hypervisor_pages - It is a dummy structure passed with the hypercall.
  * @pfn - page frame number for the page which is to be freed.
@@ -19,6 +19,7 @@ extern struct hypervisor_pages hypervisor_pagelist[MAX_FGPT_ENTRIES];
 extern int guest_page_hinting_flag;
 extern struct static_key_false guest_page_hinting_key;
 extern unsigned int isolated_page_counter, failed_isolation_counter;
+extern unsigned long per_cpu_freed_pages, reallocated_pages, free_non_buddy_pages, buddy_unequal_order_pages;
 extern bool want_page_poisoning;
 extern void (*request_hypercall)(void *, u64, int);
 extern void *balloon_ptr;
@@ -30,6 +31,18 @@ int count_isolated_pages(struct ctl_table *table, int write,
 			 void __user *buffer, size_t *lenp, loff_t *ppos);
 int count_failed_isolations(struct ctl_table *table, int write,
 			    void __user *buffer, size_t *lenp, loff_t *ppos);
+int count_per_cpu_freed_pages(struct ctl_table *table, int write,
+                         void __user *buffer, size_t *lenp,
+                         loff_t *ppos);
+int count_reallocated_pages(struct ctl_table *table, int write,
+                         void __user *buffer, size_t *lenp,
+                         loff_t *ppos);
+int count_free_non_buddy_pages(struct ctl_table *table, int write,
+                         void __user *buffer, size_t *lenp,
+                         loff_t *ppos);
+int count_buddy_unequal_order_pages(struct ctl_table *table, int write,
+                         void __user *buffer, size_t *lenp,
+                         loff_t *ppos);
 extern int __isolate_free_page(struct page *page, unsigned int order);
 
 static inline void disable_page_poisoning(void)

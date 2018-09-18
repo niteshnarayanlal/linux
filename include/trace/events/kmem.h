@@ -372,11 +372,30 @@ TRACE_EVENT(guest_free_page_slowpath,
 		__entry->order          = order;
 	),
 
-	TP_printk("Isolation request for:pfn=%lu number of order=%u",
+	TP_printk("Per cpu entry for:pfn=%lu number of order=%u",
 		  __entry->pfn,
 		  __entry->order)
 );
 
+TRACE_EVENT(guest_isolated_pages,
+	    TP_PROTO(unsigned long pfn, unsigned int order),
+
+	TP_ARGS(pfn, order),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, order)
+	),
+
+	TP_fast_assign(
+		__entry->pfn            = pfn;
+		__entry->order          = order;
+	),
+
+	TP_printk("Isolated page:pfn=%lu number of order=%u",
+		  __entry->pfn,
+		  __entry->order)
+);
 TRACE_EVENT(guest_pfn_dump,
 	    TP_PROTO(char *type, unsigned long pfn, unsigned int pages),
 

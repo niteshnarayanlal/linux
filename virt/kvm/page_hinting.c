@@ -35,9 +35,54 @@ static DEFINE_MUTEX(hinting_mutex);
 int guest_page_hinting_flag;
 EXPORT_SYMBOL(guest_page_hinting_flag);
 unsigned int isolated_page_counter, failed_isolation_counter;
+unsigned long per_cpu_freed_pages, reallocated_pages, free_non_buddy_pages, buddy_unequal_order_pages;
+EXPORT_SYMBOL(per_cpu_freed_pages);
+EXPORT_SYMBOL(reallocated_pages);
+EXPORT_SYMBOL(free_non_buddy_pages);
+EXPORT_SYMBOL(buddy_unequal_order_pages);
 EXPORT_SYMBOL(isolated_page_counter);
 EXPORT_SYMBOL(failed_isolation_counter);
 static DEFINE_PER_CPU(struct task_struct *, hinting_task);
+
+int count_per_cpu_freed_pages(struct ctl_table *table, int write,
+			 void __user *buffer, size_t *lenp,
+			 loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	return ret;
+}
+
+int count_reallocated_pages(struct ctl_table *table, int write,
+			 void __user *buffer, size_t *lenp,
+			 loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	return ret;
+}
+
+int count_free_non_buddy_pages(struct ctl_table *table, int write,
+			 void __user *buffer, size_t *lenp,
+			 loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	return ret;
+}
+
+int count_buddy_unequal_order_pages(struct ctl_table *table, int write,
+			 void __user *buffer, size_t *lenp,
+			 loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	return ret;
+}
 
 int count_isolated_pages(struct ctl_table *table, int write,
 			 void __user *buffer, size_t *lenp,
@@ -111,25 +156,59 @@ static void hinting_fn(unsigned int cpu)
 	while (idx < MAX_FGPT_ENTRIES) {
 		unsigned long pfn = free_page_obj[idx].pfn;
 		struct page *p = pfn_to_page(pfn);
+		int cnt = 0;
 
 		zone_cur = page_zone(p);
 		spin_lock_irqsave(&zone_cur->lock, flags);
 		unlocked = 0;
 
+		trace_guest_free_page_slowpath(pfn, free_page_obj[idx].order);
 		if (PageBuddy(p)) {
 			if (page_private(p) == free_page_obj[idx].order) {
 				ret = __isolate_free_page(p, page_private(p));
 				if (!ret) {
 					failed_isolation_counter++;
 				} else {
-					isolated_page_counter++;
+					cnt = 1 << page_private(p);
+					while(cnt!= 0) {
+						isolated_page_counter++;
+						cnt--;
+					}
 					guest_isolated_pages[hyp_idx].pfn =
 							pfn;
 					guest_isolated_pages[hyp_idx].pages =
 							1 << page_private(p);
-					trace_guest_free_page_slowpath(pfn, page_private(p));
+					trace_guest_isolated_pages(pfn, page_private(p));
 					hyp_idx += 1;
 				}
+			} else {
+				buddy_unequal_order_pages += 1 << free_page_obj[idx].order;
+			}
+		} else {
+			unsigned long pfn_end = pfn + (1 << free_page_obj[idx].order);
+			while (pfn <= pfn_end) {
+				struct page *p1 = pfn_to_page(pfn);
+
+				if (PageCompound(p1)) {
+					struct page *head_page = compound_head(p1);
+					unsigned long head_pfn = page_to_pfn(head_page);
+					unsigned int alloc_pages =
+						1 << compound_order(head_page);
+
+					reallocated_pages += alloc_pages;
+					pfn = head_pfn + alloc_pages;
+					trace_guest_pfn_dump("Compound",
+							     head_pfn, alloc_pages);
+					continue;
+				}
+				if (page_ref_count(p1)) {
+					reallocated_pages++;
+					pfn++;
+					trace_guest_pfn_dump("Single", pfn, 1);
+					continue;
+				}
+				free_non_buddy_pages++;
+				pfn++;
 			}
 		}
 		spin_unlock_irqrestore(&zone_cur->lock, flags);
@@ -187,6 +266,7 @@ void guest_free_page(struct page *page, int order)
 		free_page_obj[*free_page_idx].pfn = page_to_pfn(page);
 		free_page_obj[*free_page_idx].zonenum = page_zonenum(page);
 		free_page_obj[*free_page_idx].order = order;
+		per_cpu_freed_pages += 1 << order;
 		*free_page_idx += 1;
 		if (*free_page_idx == MAX_FGPT_ENTRIES)
 			wake_up_process(__this_cpu_read(hinting_task));

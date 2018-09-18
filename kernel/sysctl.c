@@ -1686,6 +1686,34 @@ static struct ctl_table vm_table[] = {
 		.mode		= 0644,
 		.proc_handler   = count_failed_isolations,
 	},
+	{
+		.procname	= "per-cpu-freed-pages",
+		.data		= &per_cpu_freed_pages,
+		.maxlen		= sizeof(per_cpu_freed_pages),
+		.mode		= 0644,
+		.proc_handler   = count_per_cpu_freed_pages,
+	},
+	{
+		.procname	= "reallocated_pages",
+		.data		= &reallocated_pages,
+		.maxlen		= sizeof(reallocated_pages),
+		.mode		= 0644,
+		.proc_handler   = count_reallocated_pages,
+	},
+	{
+		.procname	= "free-non-buddy-pages",
+		.data		= &free_non_buddy_pages,
+		.maxlen		= sizeof(free_non_buddy_pages),
+		.mode		= 0644,
+		.proc_handler   = count_free_non_buddy_pages,
+	},
+	{
+		.procname	= "buddy_unequal_order_pages",
+		.data		= &buddy_unequal_order_pages,
+		.maxlen		= sizeof(buddy_unequal_order_pages),
+		.mode		= 0644,
+		.proc_handler   = count_buddy_unequal_order_pages,
+	},
 #endif
 	{ }
 };
