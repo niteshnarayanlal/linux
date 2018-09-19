@@ -35,8 +35,9 @@ static DEFINE_MUTEX(hinting_mutex);
 int guest_page_hinting_flag;
 EXPORT_SYMBOL(guest_page_hinting_flag);
 unsigned long isolated_memory, failed_isolation_memory;
-unsigned long per_cpu_freed_memory, reallocated_memory, free_non_buddy_memory, buddy_unisolated_memory;
-EXPORT_SYMBOL(per_cpu_freed_memory);
+unsigned long stored_freed_memory, reallocated_memory, free_non_buddy_memory, buddy_unisolated_memory, total_freed_memory;
+EXPORT_SYMBOL(stored_freed_memory);
+EXPORT_SYMBOL(total_freed_memory);
 EXPORT_SYMBOL(reallocated_memory);
 EXPORT_SYMBOL(free_non_buddy_memory);
 EXPORT_SYMBOL(buddy_unisolated_memory);
@@ -44,7 +45,18 @@ EXPORT_SYMBOL(isolated_memory);
 EXPORT_SYMBOL(failed_isolation_memory);
 static DEFINE_PER_CPU(struct task_struct *, hinting_task);
 
-int count_per_cpu_freed_memory(struct ctl_table *table, int write,
+
+int count_total_freed_memory(struct ctl_table *table, int write,
+			 void __user *buffer, size_t *lenp,
+			 loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	return ret;
+}
+
+int count_stored_freed_memory(struct ctl_table *table, int write,
 			 void __user *buffer, size_t *lenp,
 			 loff_t *ppos)
 {
@@ -184,7 +196,7 @@ static void hinting_fn(unsigned int cpu)
 				buddy_unisolated_memory += mem; 
 			}
 		} else {
-			unsigned long pfn_end = pfn + (1 << free_page_obj[idx].order);
+			unsigned long pfn_end = pfn + (1 << free_page_obj[idx].order) - 1;
 			while (pfn <= pfn_end) {
 				struct page *p1 = pfn_to_page(pfn);
 				mem = 0;
@@ -261,6 +273,10 @@ void guest_free_page(struct page *page, int order)
 	local_irq_save(flags);
 	free_page_idx = this_cpu_ptr(&kvm_pt_idx);
 	free_page_obj = this_cpu_ptr(kvm_pt);
+	
+	mem = ((1 << order) * 4);
+	total_freed_memory += mem; 
+	mem = 0;
 
 	if (*free_page_idx != MAX_FGPT_ENTRIES) {
 		disable_page_poisoning();
@@ -268,9 +284,9 @@ void guest_free_page(struct page *page, int order)
 		free_page_obj[*free_page_idx].pfn = page_to_pfn(page);
 		free_page_obj[*free_page_idx].zonenum = page_zonenum(page);
 		free_page_obj[*free_page_idx].order = order;
-		mem = ((1 << order) * 4);
-		per_cpu_freed_memory += mem; 
 		*free_page_idx += 1;
+		mem = ((1 << order) * 4);
+		stored_freed_memory += mem; 
 		if (*free_page_idx == MAX_FGPT_ENTRIES)
 			wake_up_process(__this_cpu_read(hinting_task));
 	}

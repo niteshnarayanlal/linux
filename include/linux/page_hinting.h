@@ -19,7 +19,7 @@ extern struct hypervisor_pages hypervisor_pagelist[MAX_FGPT_ENTRIES];
 extern int guest_page_hinting_flag;
 extern struct static_key_false guest_page_hinting_key;
 extern unsigned long isolated_memory, failed_isolation_memory;
-extern unsigned long per_cpu_freed_memory, reallocated_memory, free_non_buddy_memory, buddy_unisolated_memory;
+extern unsigned long stored_freed_memory, reallocated_memory, free_non_buddy_memory, buddy_unisolated_memory, total_freed_memory;
 extern bool want_page_poisoning;
 extern void (*request_hypercall)(void *, u64, int);
 extern void *balloon_ptr;
@@ -31,7 +31,10 @@ int count_isolated_memory(struct ctl_table *table, int write,
 			 void __user *buffer, size_t *lenp, loff_t *ppos);
 int count_failed_isolations_memory(struct ctl_table *table, int write,
 			    void __user *buffer, size_t *lenp, loff_t *ppos);
-int count_per_cpu_freed_memory(struct ctl_table *table, int write,
+int count_stored_freed_memory(struct ctl_table *table, int write,
+                         void __user *buffer, size_t *lenp,
+                         loff_t *ppos);
+int count_total_freed_memory(struct ctl_table *table, int write,
                          void __user *buffer, size_t *lenp,
                          loff_t *ppos);
 int count_reallocated_memory(struct ctl_table *table, int write,

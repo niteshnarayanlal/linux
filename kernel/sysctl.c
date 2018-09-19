@@ -1687,11 +1687,18 @@ static struct ctl_table vm_table[] = {
 		.proc_handler   = count_failed_isolations_memory,
 	},
 	{
-		.procname	= "per-cpu-freed-memory",
-		.data		= &per_cpu_freed_memory,
-		.maxlen		= sizeof(per_cpu_freed_memory),
+		.procname	= "stored-freed-memory",
+		.data		= &stored_freed_memory,
+		.maxlen		= sizeof(stored_freed_memory),
 		.mode		= 0644,
-		.proc_handler   = count_per_cpu_freed_memory,
+		.proc_handler   = count_stored_freed_memory,
+	},
+	{
+		.procname	= "total-freed-memory",
+		.data		= &total_freed_memory,
+		.maxlen		= sizeof(total_freed_memory),
+		.mode		= 0644,
+		.proc_handler   = count_total_freed_memory,
 	},
 	{
 		.procname	= "reallocated_memory",
