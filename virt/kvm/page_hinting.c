@@ -170,8 +170,8 @@ struct page* get_buddy_page(struct page *page)
 
         for (order = 0; order < MAX_ORDER; order++) {
                 struct page *page_head = page - (pfn & ((1 << order) - 1));
-
-                if (PageBuddy(page_head) && page_private(page_head) >= order)
+                
+		if (PageBuddy(page_head) && page_private(page_head) >= order)
         		return page_head;
 	}
 
@@ -188,7 +188,6 @@ static void hinting_fn(unsigned int cpu)
 	int hyp_idx = 0;
 	struct zone *zone_cur;
 	unsigned long flags = 0;
-	int unlocked = 0;
 	unsigned int mem = 0;
 
 	trace_guest_str_dump("hinting_fn:Scan per cpu, isolate and report");
@@ -198,29 +197,28 @@ static void hinting_fn(unsigned int cpu)
 
 		zone_cur = page_zone(p);
 		spin_lock_irqsave(&zone_cur->lock, flags);
-		unlocked = 0;
-
 		trace_guest_free_page_slowpath(pfn, free_page_obj[idx].order);
 		if (PageBuddy(p)) {
-			if (page_private(p) == free_page_obj[idx].order) {
-				ret = __isolate_free_page(p, page_private(p));
-				if (!ret) {
-					mem = ((1 << page_private(p)) * 4);
-					failed_isolation_memory += mem; 
-				} else {
-					mem = ((1 << page_private(p)) * 4);
-					total_isolated_memory += mem; 
-					guest_isolated_pages[hyp_idx].pfn =
-							pfn;
-					guest_isolated_pages[hyp_idx].pages =
-							1 << page_private(p);
-					trace_guest_isolated_pages(pfn, page_private(p));
-					hyp_idx += 1;
-				}
+			ret = __isolate_free_page(p, page_private(p));
+			if (!ret) {
+				mem = ((1 << page_private(p)) * 4);
+				failed_isolation_memory += mem; 
+			} else {
+				mem = ((1 << page_private(p)) * 4);
+				total_isolated_memory += mem; 
+				guest_isolated_pages[hyp_idx].pfn =
+						pfn;
+				guest_isolated_pages[hyp_idx].pages =
+						1 << page_private(p);
+				trace_guest_isolated_pages(pfn, page_private(p));
+				hyp_idx += 1;
+			}
+#if 0		
 			} else {
 				mem = ((1 << free_page_obj[idx].order) * 4);
 				buddy_unisolated_memory += mem; 
 			}
+#endif
 		}
 		else if(page_private(pfn_to_page(pfn)) == 0) {
 			struct page *buddy_page = get_buddy_page(pfn_to_page(pfn));
@@ -231,6 +229,7 @@ static void hinting_fn(unsigned int cpu)
 						failed_isolation_memory += mem;
 					} else {
 						mem = ((1 << page_private(buddy_page)) * 4);
+
 						total_isolated_memory += mem; 
 						tail_isolated_memory += mem; 
 						guest_isolated_pages[hyp_idx].pfn =
@@ -241,7 +240,8 @@ static void hinting_fn(unsigned int cpu)
 						hyp_idx += 1;
 					}
 				}
-		} else {
+		}
+	       	else {
 			unsigned long pfn_end = pfn + (1 << free_page_obj[idx].order) - 1;
 			while (pfn <= pfn_end) {
 				struct page *p1 = pfn_to_page(pfn);
