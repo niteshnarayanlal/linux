@@ -1673,11 +1673,18 @@ static struct ctl_table vm_table[] = {
 		.proc_handler   = guest_page_hinting_sysctl,
 	},
 	{
-		.procname	= "isolated-memory",
-		.data		= &isolated_memory,
-		.maxlen		= sizeof(isolated_memory),
+		.procname	= "tail-isolated-memory",
+		.data		= &tail_isolated_memory,
+		.maxlen		= sizeof(tail_isolated_memory),
 		.mode		= 0644,
-		.proc_handler   = count_isolated_memory,
+		.proc_handler   = count_tail_isolated_memory,
+	},
+	{
+		.procname	= "total-isolated-memory",
+		.data		= &total_isolated_memory,
+		.maxlen		= sizeof(total_isolated_memory),
+		.mode		= 0644,
+		.proc_handler   = count_total_isolated_memory,
 	},
 	{
 		.procname	= "failed-isolation-memory",
@@ -1687,11 +1694,11 @@ static struct ctl_table vm_table[] = {
 		.proc_handler   = count_failed_isolations_memory,
 	},
 	{
-		.procname	= "stored-freed-memory",
-		.data		= &stored_freed_memory,
-		.maxlen		= sizeof(stored_freed_memory),
+		.procname	= "captured-freed-memory",
+		.data		= &captured_freed_memory,
+		.maxlen		= sizeof(captured_freed_memory),
 		.mode		= 0644,
-		.proc_handler   = count_stored_freed_memory,
+		.proc_handler   = count_captured_freed_memory,
 	},
 	{
 		.procname	= "total-freed-memory",

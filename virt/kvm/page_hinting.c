@@ -34,14 +34,15 @@ EXPORT_SYMBOL(guest_page_hinting_key);
 static DEFINE_MUTEX(hinting_mutex);
 int guest_page_hinting_flag;
 EXPORT_SYMBOL(guest_page_hinting_flag);
-unsigned long isolated_memory, failed_isolation_memory;
-unsigned long stored_freed_memory, reallocated_memory, free_non_buddy_memory, buddy_unisolated_memory, total_freed_memory;
-EXPORT_SYMBOL(stored_freed_memory);
+unsigned long total_isolated_memory, failed_isolation_memory, tail_isolated_memory;
+unsigned long captured_freed_memory, reallocated_memory, free_non_buddy_memory, buddy_unisolated_memory, total_freed_memory;
+EXPORT_SYMBOL(captured_freed_memory);
 EXPORT_SYMBOL(total_freed_memory);
 EXPORT_SYMBOL(reallocated_memory);
 EXPORT_SYMBOL(free_non_buddy_memory);
 EXPORT_SYMBOL(buddy_unisolated_memory);
-EXPORT_SYMBOL(isolated_memory);
+EXPORT_SYMBOL(total_isolated_memory);
+EXPORT_SYMBOL(tail_isolated_memory);
 EXPORT_SYMBOL(failed_isolation_memory);
 static DEFINE_PER_CPU(struct task_struct *, hinting_task);
 
@@ -56,7 +57,7 @@ int count_total_freed_memory(struct ctl_table *table, int write,
 	return ret;
 }
 
-int count_stored_freed_memory(struct ctl_table *table, int write,
+int count_captured_freed_memory(struct ctl_table *table, int write,
 			 void __user *buffer, size_t *lenp,
 			 loff_t *ppos)
 {
@@ -96,7 +97,17 @@ int count_buddy_unisolated_memory(struct ctl_table *table, int write,
 	return ret;
 }
 
-int count_isolated_memory(struct ctl_table *table, int write,
+int count_tail_isolated_memory(struct ctl_table *table, int write,
+			 void __user *buffer, size_t *lenp,
+			 loff_t *ppos)
+{
+	int ret;
+
+	trace_guest_str_dump("count_isolated_pages");
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	return ret;
+}
+int count_total_isolated_memory(struct ctl_table *table, int write,
 			 void __user *buffer, size_t *lenp,
 			 loff_t *ppos)
 {
@@ -152,6 +163,21 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 	}
 }
 
+struct page* get_buddy_page(struct page *page)
+{
+        unsigned long pfn = page_to_pfn(page);
+        unsigned int order;
+
+        for (order = 0; order < MAX_ORDER; order++) {
+                struct page *page_head = page - (pfn & ((1 << order) - 1));
+
+                if (PageBuddy(page_head) && page_private(page_head) >= order)
+        		return page_head;
+	}
+
+        return NULL;
+}
+
 static void hinting_fn(unsigned int cpu)
 {
 	int idx = 0, ret = 0;
@@ -183,7 +209,7 @@ static void hinting_fn(unsigned int cpu)
 					failed_isolation_memory += mem; 
 				} else {
 					mem = ((1 << page_private(p)) * 4);
-					isolated_memory += mem; 
+					total_isolated_memory += mem; 
 					guest_isolated_pages[hyp_idx].pfn =
 							pfn;
 					guest_isolated_pages[hyp_idx].pages =
@@ -195,6 +221,26 @@ static void hinting_fn(unsigned int cpu)
 				mem = ((1 << free_page_obj[idx].order) * 4);
 				buddy_unisolated_memory += mem; 
 			}
+		}
+		else if(page_private(pfn_to_page(pfn)) == 0) {
+			struct page *buddy_page = get_buddy_page(pfn_to_page(pfn));
+				if (buddy_page != NULL) {
+					ret = __isolate_free_page(buddy_page, page_private(buddy_page));
+					if (!ret) {
+						mem = ((1 << page_private(buddy_page)) * 4);
+						failed_isolation_memory += mem;
+					} else {
+						mem = ((1 << page_private(buddy_page)) * 4);
+						total_isolated_memory += mem; 
+						tail_isolated_memory += mem; 
+						guest_isolated_pages[hyp_idx].pfn =
+							page_to_pfn(buddy_page);
+						guest_isolated_pages[hyp_idx].pages =
+							1 << page_private(buddy_page);
+						trace_guest_isolated_pages(page_to_pfn(buddy_page), page_private(buddy_page));
+						hyp_idx += 1;
+					}
+				}
 		} else {
 			unsigned long pfn_end = pfn + (1 << free_page_obj[idx].order) - 1;
 			while (pfn <= pfn_end) {
@@ -286,7 +332,7 @@ void guest_free_page(struct page *page, int order)
 		free_page_obj[*free_page_idx].order = order;
 		*free_page_idx += 1;
 		mem = ((1 << order) * 4);
-		stored_freed_memory += mem; 
+		captured_freed_memory += mem; 
 		if (*free_page_idx == MAX_FGPT_ENTRIES)
 			wake_up_process(__this_cpu_read(hinting_task));
 	}
