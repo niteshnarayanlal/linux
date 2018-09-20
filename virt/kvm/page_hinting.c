@@ -199,6 +199,15 @@ static void hinting_fn(unsigned int cpu)
 		spin_lock_irqsave(&zone_cur->lock, flags);
 		trace_guest_free_page_slowpath(pfn, free_page_obj[idx].order);
 		if (PageBuddy(p)) {
+			/* We are isolating based on the order stored in the buddy even if the
+			 * per cpu carries a higher order.
+			 */
+			if (free_page_obj[idx].order > page_private(p)) {
+				mem = (1 << free_page_obj[idx].order) - (1 << page_private(p));
+				mem = mem * 4;
+				reallocated_memory += mem;
+				mem = 0;
+			}
 			ret = __isolate_free_page(p, page_private(p));
 			if (!ret) {
 				mem = ((1 << page_private(p)) * 4);
@@ -213,12 +222,6 @@ static void hinting_fn(unsigned int cpu)
 				trace_guest_isolated_pages(pfn, page_private(p));
 				hyp_idx += 1;
 			}
-#if 0		
-			} else {
-				mem = ((1 << free_page_obj[idx].order) * 4);
-				buddy_unisolated_memory += mem; 
-			}
-#endif
 		}
 		else if(page_private(pfn_to_page(pfn)) == 0) {
 			struct page *buddy_page = get_buddy_page(pfn_to_page(pfn));
