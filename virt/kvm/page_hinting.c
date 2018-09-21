@@ -34,7 +34,7 @@ EXPORT_SYMBOL(guest_page_hinting_key);
 static DEFINE_MUTEX(hinting_mutex);
 int guest_page_hinting_flag;
 EXPORT_SYMBOL(guest_page_hinting_flag);
-unsigned long total_isolated_memory, failed_isolation_memory, tail_isolated_memory;
+unsigned long total_isolated_memory, failed_isolation_memory, tail_isolated_memory, guest_returned_memory, scanned_memory;
 unsigned long captured_freed_memory, reallocated_memory, free_non_buddy_memory, buddy_unisolated_memory, total_freed_memory;
 EXPORT_SYMBOL(captured_freed_memory);
 EXPORT_SYMBOL(total_freed_memory);
@@ -44,8 +44,28 @@ EXPORT_SYMBOL(buddy_unisolated_memory);
 EXPORT_SYMBOL(total_isolated_memory);
 EXPORT_SYMBOL(tail_isolated_memory);
 EXPORT_SYMBOL(failed_isolation_memory);
+EXPORT_SYMBOL(guest_returned_memory);
+EXPORT_SYMBOL(scanned_memory);
 static DEFINE_PER_CPU(struct task_struct *, hinting_task);
 
+int count_guest_returned_memory(struct ctl_table *table, int write,
+			 void __user *buffer, size_t *lenp,
+			 loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	return ret;
+}
+int count_scanned_memory(struct ctl_table *table, int write,
+			 void __user *buffer, size_t *lenp,
+			 loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	return ret;
+}
 
 int count_total_freed_memory(struct ctl_table *table, int write,
 			 void __user *buffer, size_t *lenp,
@@ -151,6 +171,7 @@ int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 {
 	int i = 0;
+	unsigned long mem = 0;
 
 	trace_guest_str_dump("hyperlist_ready:Hypercall to host...");
 	request_hypercall(balloon_ptr, (u64)&guest_isolated_pages[0], entries);
@@ -159,6 +180,8 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 
 		init_page_count(p);
 		__free_pages(p, page_private(p));
+		mem = (1 << page_private(p)) * 4;
+		guest_returned_memory += mem;	
 		i++;
 	}
 }
@@ -188,33 +211,26 @@ static void hinting_fn(unsigned int cpu)
 	int hyp_idx = 0;
 	struct zone *zone_cur;
 	unsigned long flags = 0;
-	unsigned int mem = 0;
 
 	trace_guest_str_dump("hinting_fn:Scan per cpu, isolate and report");
+
 	while (idx < MAX_FGPT_ENTRIES) {
 		unsigned long pfn = free_page_obj[idx].pfn;
 		struct page *p = pfn_to_page(pfn);
+		struct page *buddy_page = get_buddy_page(pfn_to_page(pfn));
 
+		scanned_memory += (1 << free_page_obj[idx].order) * 4; 
+	
 		zone_cur = page_zone(p);
 		spin_lock_irqsave(&zone_cur->lock, flags);
 		trace_guest_free_page_slowpath(pfn, free_page_obj[idx].order);
 		if (PageBuddy(p)) {
-			/* We are isolating based on the order stored in the buddy even if the
-			 * per cpu carries a higher order.
-			 */
-			if (free_page_obj[idx].order > page_private(p)) {
-				mem = (1 << free_page_obj[idx].order) - (1 << page_private(p));
-				mem = mem * 4;
-				reallocated_memory += mem;
-				mem = 0;
-			}
+
 			ret = __isolate_free_page(p, page_private(p));
 			if (!ret) {
-				mem = ((1 << page_private(p)) * 4);
-				failed_isolation_memory += mem; 
+				failed_isolation_memory += ((1 << page_private(buddy_page)) * 4); 
 			} else {
-				mem = ((1 << page_private(p)) * 4);
-				total_isolated_memory += mem; 
+				total_isolated_memory += ((1 << page_private(buddy_page)) * 4); 
 				guest_isolated_pages[hyp_idx].pfn =
 						pfn;
 				guest_isolated_pages[hyp_idx].pages =
@@ -222,56 +238,36 @@ static void hinting_fn(unsigned int cpu)
 				trace_guest_isolated_pages(pfn, page_private(p));
 				hyp_idx += 1;
 			}
-		}
-		else if(page_private(pfn_to_page(pfn)) == 0) {
-			struct page *buddy_page = get_buddy_page(pfn_to_page(pfn));
-				if (buddy_page != NULL) {
-					ret = __isolate_free_page(buddy_page, page_private(buddy_page));
-					if (!ret) {
-						mem = ((1 << page_private(buddy_page)) * 4);
-						failed_isolation_memory += mem;
-					} else {
-						mem = ((1 << page_private(buddy_page)) * 4);
-
-						total_isolated_memory += mem; 
-						tail_isolated_memory += mem; 
-						guest_isolated_pages[hyp_idx].pfn =
-							page_to_pfn(buddy_page);
-						guest_isolated_pages[hyp_idx].pages =
-							1 << page_private(buddy_page);
-						trace_guest_isolated_pages(page_to_pfn(buddy_page), page_private(buddy_page));
-						hyp_idx += 1;
-					}
-				}
-		}
-	       	else {
-			unsigned long pfn_end = pfn + (1 << free_page_obj[idx].order) - 1;
-			while (pfn <= pfn_end) {
-				struct page *p1 = pfn_to_page(pfn);
-				mem = 0;
-
-				if (PageCompound(p1)) {
-					struct page *head_page = compound_head(p1);
-					unsigned long head_pfn = page_to_pfn(head_page);
-					unsigned int alloc_pages =
-						1 << compound_order(head_page);
-
-					mem = (alloc_pages * 4);
-					reallocated_memory += mem; 
-					pfn = head_pfn + alloc_pages;
-					trace_guest_pfn_dump("Compound",
-							     head_pfn, alloc_pages);
-					continue;
-				}
-				if (page_ref_count(p1)) {
-					reallocated_memory += 4;
-					pfn++;
-					trace_guest_pfn_dump("Single", pfn, 1);
-					continue;
-				}
-				free_non_buddy_memory += 4;
-				pfn++;
+		} else if (buddy_page != NULL) {
+			ret = __isolate_free_page(buddy_page, page_private(buddy_page));
+			if (!ret) {
+				failed_isolation_memory += ((1 << page_private(buddy_page)) * 4);
+			} else {
+				total_isolated_memory += ((1 << page_private(buddy_page)) * 4); 
+				tail_isolated_memory += ((1 << page_private(buddy_page)) * 4); 
+				guest_isolated_pages[hyp_idx].pfn =
+					page_to_pfn(buddy_page);
+				guest_isolated_pages[hyp_idx].pages =
+					1 << page_private(buddy_page);
+				trace_guest_isolated_pages(page_to_pfn(buddy_page), page_private(buddy_page));
+				hyp_idx += 1;
 			}
+		}
+		else if (PageCompound(p)) {
+			struct page *head_page = compound_head(p);
+			unsigned long head_pfn = page_to_pfn(head_page);
+			unsigned int alloc_pages =
+				1 << compound_order(head_page);
+
+			reallocated_memory += alloc_pages * 4; 
+			trace_guest_pfn_dump("Compound",
+					     head_pfn, alloc_pages);
+		} else if (page_ref_count(p)) {
+			reallocated_memory += 4;
+			trace_guest_pfn_dump("Single", pfn, 1);
+		} else {
+			free_non_buddy_memory += 4;
+			pfn++;
 		}
 		spin_unlock_irqrestore(&zone_cur->lock, flags);
 		free_page_obj[idx].pfn = 0;
@@ -312,7 +308,6 @@ void guest_free_page(struct page *page, int order)
 	unsigned long flags;
 	int *free_page_idx;
 	struct kvm_free_pages *free_page_obj;
-	unsigned int mem = 0;
 	/*
 	 * use of global variables may trigger a race condition between irq and
 	 * process context causing unwanted overwrites. This will be replaced
@@ -323,9 +318,7 @@ void guest_free_page(struct page *page, int order)
 	free_page_idx = this_cpu_ptr(&kvm_pt_idx);
 	free_page_obj = this_cpu_ptr(kvm_pt);
 	
-	mem = ((1 << order) * 4);
-	total_freed_memory += mem; 
-	mem = 0;
+	total_freed_memory += ((1 << order) * 4); 
 
 	if (*free_page_idx != MAX_FGPT_ENTRIES) {
 		disable_page_poisoning();
@@ -334,8 +327,7 @@ void guest_free_page(struct page *page, int order)
 		free_page_obj[*free_page_idx].zonenum = page_zonenum(page);
 		free_page_obj[*free_page_idx].order = order;
 		*free_page_idx += 1;
-		mem = ((1 << order) * 4);
-		captured_freed_memory += mem; 
+		captured_freed_memory += ((1 << order) * 4); 
 		if (*free_page_idx == MAX_FGPT_ENTRIES)
 			wake_up_process(__this_cpu_read(hinting_task));
 	}

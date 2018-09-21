@@ -1694,6 +1694,20 @@ static struct ctl_table vm_table[] = {
 		.proc_handler   = count_failed_isolations_memory,
 	},
 	{
+		.procname	= "scanned-memory",
+		.data		= &scanned_memory,
+		.maxlen		= sizeof(scanned_memory),
+		.mode		= 0644,
+		.proc_handler   = count_scanned_memory,
+	},
+	{
+		.procname	= "guest-returned-memory",
+		.data		= &guest_returned_memory,
+		.maxlen		= sizeof(guest_returned_memory),
+		.mode		= 0644,
+		.proc_handler   = count_guest_returned_memory,
+	},
+	{
 		.procname	= "captured-freed-memory",
 		.data		= &captured_freed_memory,
 		.maxlen		= sizeof(captured_freed_memory),
