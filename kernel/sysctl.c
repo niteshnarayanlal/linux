@@ -1722,7 +1722,7 @@ static struct ctl_table vm_table[] = {
 		.proc_handler   = count_total_freed_memory,
 	},
 	{
-		.procname	= "reallocated_memory",
+		.procname	= "reallocated-memory",
 		.data		= &reallocated_memory,
 		.maxlen		= sizeof(reallocated_memory),
 		.mode		= 0644,
@@ -1736,7 +1736,7 @@ static struct ctl_table vm_table[] = {
 		.proc_handler   = count_free_non_buddy_memory,
 	},
 	{
-		.procname	= "buddy_unisolated_memory",
+		.procname	= "buddy-unisolated-memory",
 		.data		= &buddy_unisolated_memory,
 		.maxlen		= sizeof(buddy_unisolated_memory),
 		.mode		= 0644,

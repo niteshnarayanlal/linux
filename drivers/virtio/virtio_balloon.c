@@ -99,6 +99,7 @@ static void tell_host_one_page(struct virtio_balloon *vb, struct virtqueue *vq,
 	unsigned int id = VIRTQUEUE_DESC_ID_INIT;
 	u64 gpaddr = virt_to_phys((void *)gvaddr);
 
+	trace_printk("\n\t%d:%s Right before kicking the host...", __LINE__, __func__);
 	virtqueue_add_chain_desc(vq, gpaddr, len, &id, &id, 0);
 	virtqueue_add_chain(vq, id, 0, NULL, (void *)gpaddr, NULL);
 }
@@ -107,6 +108,7 @@ void virtballoon_page_hinting(struct virtio_balloon *vb, u64 gvaddr,
 			      int hyper_entries)
 {
 	vb->num_pfns = hyper_entries;
+	trace_printk("\n\t%d:%s telling host about the address:%lu total entries:%d", __LINE__, __func__, gvaddr, hyper_entries);
 	tell_host_one_page(vb, vb->hinting_vq, gvaddr, hyper_entries);
 }
 
@@ -114,6 +116,7 @@ static void hinting_ack(struct virtqueue *vq)
 {
 	struct virtio_balloon *vb = vq->vdev->priv;
 
+	trace_printk("\n\t%d:%s Ack from the host recieved", __LINE__, __func__);
 	wake_up(&vb->acked);
 }
 
