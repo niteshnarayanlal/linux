@@ -1736,11 +1736,18 @@ static struct ctl_table vm_table[] = {
 		.proc_handler   = count_free_non_buddy_memory,
 	},
 	{
-		.procname	= "buddy-unisolated-memory",
-		.data		= &buddy_unisolated_memory,
-		.maxlen		= sizeof(buddy_unisolated_memory),
+		.procname	= "buddy-skipped-memory",
+		.data		= &buddy_skipped_memory,
+		.maxlen		= sizeof(buddy_skipped_memory),
 		.mode		= 0644,
-		.proc_handler   = count_buddy_unisolated_memory,
+		.proc_handler   = count_buddy_skipped_memory,
+	},
+	{
+		.procname	= "last-entry-memory",
+		.data		= &last_entry_memory,
+		.maxlen		= sizeof(last_entry_memory),
+		.mode		= 0644,
+		.proc_handler   = count_last_entry_memory,
 	},
 #endif
 	{ }
