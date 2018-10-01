@@ -188,6 +188,7 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 	trace_guest_str_dump("hyperlist_ready:Hypercall to host...");
 	if (hinting_debug == 1)
 		trace_printk("\n%d:%s Sending isolated array entries to the host with start address:%llu", __LINE__, __func__, (unsigned long long)gvaddr);
+	request_hypercall(balloon_ptr, (u64)&guest_isolated_pages[0], entries);
 	while (i < entries) {
 		struct page *p = pfn_to_page(guest_isolated_pages[i].pfn);
 		

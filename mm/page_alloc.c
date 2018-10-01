@@ -2761,10 +2761,11 @@ static void free_unref_page_commit(struct page *page, unsigned long pfn)
 		}
 		migratetype = MIGRATE_MOVABLE;
 	}
-
 	pcp = &this_cpu_ptr(zone->pageset)->pcp;
 	list_add(&page->lru, &pcp->lists[migratetype]);
 	pcp->count++;
+	if (strstr(current->comm, "test_basic_allo"))
+		trace_printk("\n%d:%s PFN:%lu held in pcpubulkfree current count:%d high:%d\n", __LINE__, __func__, pfn, pcp->count, pcp->high);
 	if (pcp->count >= pcp->high) {
 		unsigned long batch = READ_ONCE(pcp->batch);
 		free_pcppages_bulk(zone, batch, pcp);
