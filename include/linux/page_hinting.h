@@ -59,9 +59,6 @@ int count_zero_order_pages(struct ctl_table *table, int write,
                          void __user *buffer, size_t *lenp,
                          loff_t *ppos);
 extern int __isolate_free_page(struct page *page, unsigned int order);
-extern void free_pcppages_bulk(struct zone *zone, int count,
-                                        struct per_cpu_pages *pcp);
-
 
 static inline void disable_page_poisoning(void)
 {
