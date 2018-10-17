@@ -315,7 +315,8 @@ static void hinting_fn(unsigned int cpu)
 			}
 		
 			if (PageBuddy(p)) {
-					ret = __isolate_free_page(p, page_private(p));
+//					ret = __isolate_free_page(p, page_private(p));
+					ret = 1;
 				if (!ret) {
 						if (hinting_debug == 1) {
 							failed_isolation_memory += ((1 << page_private(p)) * 4); 
@@ -342,7 +343,8 @@ static void hinting_fn(unsigned int cpu)
 			
 			struct page *buddy_page = get_buddy_page(p);
 			if (buddy_page != NULL) {
-				ret = __isolate_free_page(buddy_page, page_private(buddy_page));
+//				ret = __isolate_free_page(buddy_page, page_private(buddy_page));
+				ret = 1;
 				if (!ret) {
 					if (hinting_debug == 1) {
 						failed_isolation_memory += ((1 << page_private(buddy_page)) * 4);
@@ -383,7 +385,7 @@ static void hinting_fn(unsigned int cpu)
 		idx++;
 	}
 	if (hyp_idx > 0) {
-		hyperlist_ready(guest_isolated_pages, hyp_idx);
+//		hyperlist_ready(guest_isolated_pages, hyp_idx);
 	}
 
 	*kvm_idx = 0;
