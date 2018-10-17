@@ -36,7 +36,7 @@ static DEFINE_MUTEX(hinting_mutex);
 int guest_page_hinting_flag;
 EXPORT_SYMBOL(guest_page_hinting_flag);
 unsigned long total_isolated_memory, failed_isolation_memory, tail_isolated_memory, guest_returned_memory, scanned_memory, buddy_skipped_memory;
-unsigned long captured_freed_memory, reallocated_memory, free_non_buddy_memory, total_freed_memory, last_entry_memory;
+unsigned long captured_freed_memory, reallocated_memory, free_non_buddy_memory, total_freed_memory, pcpbulklist_memory, zero_order_pages, lrulist_memory;
 EXPORT_SYMBOL(captured_freed_memory);
 EXPORT_SYMBOL(total_freed_memory);
 EXPORT_SYMBOL(reallocated_memory);
@@ -47,11 +47,31 @@ EXPORT_SYMBOL(failed_isolation_memory);
 EXPORT_SYMBOL(guest_returned_memory);
 EXPORT_SYMBOL(scanned_memory);
 EXPORT_SYMBOL(buddy_skipped_memory);
-EXPORT_SYMBOL(last_entry_memory);
+EXPORT_SYMBOL(pcpbulklist_memory);
+EXPORT_SYMBOL(lrulist_memory);
+EXPORT_SYMBOL(zero_order_pages);
 static DEFINE_PER_CPU(struct task_struct *, hinting_task);
 int hinting_debug;
 
-int count_last_entry_memory(struct ctl_table *table, int write,
+int count_zero_order_pages(struct ctl_table *table, int write,
+			 void __user *buffer, size_t *lenp,
+			 loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	return ret;
+}
+int count_lrulist_memory(struct ctl_table *table, int write,
+			 void __user *buffer, size_t *lenp,
+			 loff_t *ppos)
+{
+	int ret;
+
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	return ret;
+}
+int count_pcpbulklist_memory(struct ctl_table *table, int write,
 			 void __user *buffer, size_t *lenp,
 			 loff_t *ppos)
 {
@@ -218,6 +238,21 @@ struct page* get_buddy_page(struct page *page)
         return NULL;
 }
 
+int find_lrulist(struct zone *zone, struct page *p)
+{
+        int order;
+	struct page *page, *tmp;
+
+	for (order = 0; order < MAX_ORDER; order++) {
+                list_for_each_entry_safe(page, tmp, &zone->free_area[order].free_list[p->index], lru) {
+			trace_printk("\n%d:%s pfn:%lu pfn to find:%lu\n",__LINE__, __func__, page_to_pfn(page), page_to_pfn(p));
+			if(page_to_pfn(p) == page_to_pfn(page))
+				return 1;
+                }
+        }
+	return 0;
+}
+
 static void hinting_fn(unsigned int cpu)
 {
 	int idx = 0, ret = 0;
@@ -235,7 +270,6 @@ static void hinting_fn(unsigned int cpu)
 	while (idx < MAX_FGPT_ENTRIES) {
 		unsigned long pfn = free_page_obj[idx].pfn;
 		unsigned long pfn_end = free_page_obj[idx].pfn + (1 << free_page_obj[idx].order) - 1;
-		unsigned long pfn_check = pfn;
 
 		if (hinting_debug == 1)
 			trace_printk("\n\t\t%d:%s Scanning idx:%d PFN:%lu pfn_end:%lu order:%d", __LINE__, __func__, idx, free_page_obj[idx].pfn, pfn_end, free_page_obj[idx].order);
@@ -282,7 +316,7 @@ static void hinting_fn(unsigned int cpu)
 		
 			if (PageBuddy(p)) {
 					ret = __isolate_free_page(p, page_private(p));
-					if (!ret) {
+				if (!ret) {
 						if (hinting_debug == 1) {
 							failed_isolation_memory += ((1 << page_private(p)) * 4); 
 							trace_printk("\n\t\t\t\t%d:%s Isolation failed for PFN:%lu order:%lu", __LINE__, __func__, pfn, page_private(p));
@@ -334,14 +368,12 @@ static void hinting_fn(unsigned int cpu)
 				continue;
 			}
 			if (hinting_debug == 1) {
-				if(idx == MAX_FGPT_ENTRIES - 1)
-					last_entry_memory += 4;
 				scanned_memory += 4;
 				free_non_buddy_memory += 4;
 				trace_printk("\n\t\t\t\t%d:%s PFN:%lu is not reallocated nor it is a part of buddy", __LINE__, __func__, pfn);
 			}
-			pfn++;
 			spin_unlock_irqrestore(&zone_cur->lock, flags);
+			pfn++;
 		}
 		free_page_obj[idx].pfn = 0;
 		free_page_obj[idx].order = -1;
@@ -395,6 +427,8 @@ void guest_free_page(struct page *page, int order)
 	free_page_idx = this_cpu_ptr(&kvm_pt_idx);
 	free_page_obj = this_cpu_ptr(kvm_pt);
 
+	if(order == 0)
+		zero_order_pages = zero_order_pages + 1;
 	if (strstr(current->comm, "test_basic_allo")) {
 		total_freed_memory += ((1 << order) * 4); 
 		trace_printk("\n%d:%s Page freed pfn:%lu order:%d total_freed_memory:%lu free_page_idx:%d", __LINE__, __func__, page_to_pfn(page), order, captured_freed_memory, *free_page_idx);	
@@ -410,6 +444,7 @@ void guest_free_page(struct page *page, int order)
 		if (strstr(current->comm, "test_basic_allo")) {
 			captured_freed_memory += ((1 << order) * 4); 
 			trace_printk("\n%d:%s Free page pfn:%lu order:%d captured_freed_memory:%lu free_page_idx:%d", __LINE__, __func__, page_to_pfn(page), order, captured_freed_memory, *free_page_idx);	
+			trace_printk("\nzero_order_pages:%lu\n", zero_order_pages);
 		}
 
 		if (*free_page_idx == MAX_FGPT_ENTRIES) {

@@ -1673,6 +1673,13 @@ static struct ctl_table vm_table[] = {
 		.proc_handler   = guest_page_hinting_sysctl,
 	},
 	{
+		.procname	= "zero-order-pages",
+		.data		= &zero_order_pages,
+		.maxlen		= sizeof(zero_order_pages),
+		.mode		= 0644,
+		.proc_handler   = count_zero_order_pages,
+	},
+	{
 		.procname	= "tail-isolated-memory",
 		.data		= &tail_isolated_memory,
 		.maxlen		= sizeof(tail_isolated_memory),
@@ -1743,11 +1750,18 @@ static struct ctl_table vm_table[] = {
 		.proc_handler   = count_buddy_skipped_memory,
 	},
 	{
-		.procname	= "last-entry-memory",
-		.data		= &last_entry_memory,
-		.maxlen		= sizeof(last_entry_memory),
+		.procname	= "pcpbulklist-memory",
+		.data		= &pcpbulklist_memory,
+		.maxlen		= sizeof(pcpbulklist_memory),
 		.mode		= 0644,
-		.proc_handler   = count_last_entry_memory,
+		.proc_handler   = count_pcpbulklist_memory,
+	},
+	{
+		.procname	= "lrulist-memory",
+		.data		= &lrulist_memory,
+		.maxlen		= sizeof(lrulist_memory),
+		.mode		= 0644,
+		.proc_handler   = count_lrulist_memory,
 	},
 #endif
 	{ }
