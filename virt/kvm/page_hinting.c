@@ -205,20 +205,16 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 	unsigned long mem = 0;
 	u64 gvaddr = (u64) &guest_isolated_pages[0];
 
-	trace_guest_str_dump("hyperlist_ready:Hypercall to host...");
-	if (hinting_debug == 1)
-		trace_printk("\n%d:%s Sending isolated array entries to the host with start address:%llu", __LINE__, __func__, (unsigned long long)gvaddr);
-	//request_hypercall(balloon_ptr, (u64)&guest_isolated_pages[0], entries);
+	request_hypercall(balloon_ptr, (u64)&guest_isolated_pages[0], entries);
 	while (i < entries) {
 		struct page *p = pfn_to_page(guest_isolated_pages[i].pfn);
 		
 		if (hinting_debug == 1) {
-			trace_printk("\n%d:%s Returning earlier isolated PFN:%lu back to the guest with order:%lu", __LINE__, __func__, guest_isolated_pages[i].pfn, page_private(p));
-			mem = (1 << page_private(p)) * 4;
+			mem = (1 << guest_isolated_pages[i].order) * 4;
 			guest_returned_memory += mem;	
 		}
-		init_page_count(p);
-		__free_pages(p, page_private(p));
+		int mt = get_pageblock_migratetype(p);
+        	__free_one_page(p, page_to_pfn(p), page_zone(p), guest_isolated_pages[i].order, mt);
 		i++;
 	}
 }
@@ -238,21 +234,6 @@ struct page* get_buddy_page(struct page *page)
         return NULL;
 }
 
-int find_lrulist(struct zone *zone, struct page *p)
-{
-        int order;
-	struct page *page, *tmp;
-
-	for (order = 0; order < MAX_ORDER; order++) {
-                list_for_each_entry_safe(page, tmp, &zone->free_area[order].free_list[p->index], lru) {
-			trace_printk("\n%d:%s pfn:%lu pfn to find:%lu\n",__LINE__, __func__, page_to_pfn(page), page_to_pfn(p));
-			if(page_to_pfn(p) == page_to_pfn(page))
-				return 1;
-                }
-        }
-	return 0;
-}
-
 static void hinting_fn(unsigned int cpu)
 {
 	int idx = 0, ret = 0;
@@ -264,24 +245,17 @@ static void hinting_fn(unsigned int cpu)
 	struct zone *zone_cur;
 	unsigned long flags = 0;
    
-	if (hinting_debug == 1) {
-		trace_printk("\n\t%d:%s Thread is now alive...", __LINE__, __func__);
-	}
 	while (idx < MAX_FGPT_ENTRIES) {
 		unsigned long pfn = free_page_obj[idx].pfn;
 		unsigned long pfn_end = free_page_obj[idx].pfn + (1 << free_page_obj[idx].order) - 1;
 
-		if (hinting_debug == 1)
-			trace_printk("\n\t\t%d:%s Scanning idx:%d PFN:%lu pfn_end:%lu order:%d", __LINE__, __func__, idx, free_page_obj[idx].pfn, pfn_end, free_page_obj[idx].order);
 		while (pfn <= pfn_end) {
 			struct page *p = pfn_to_page(pfn);
-	
-			if (hinting_debug == 1)
-				trace_printk("\n\t\t\t%d:%s Scanning each pfn: idx:%d PFN:%lu pfn_end:%lu page private order:%lu so far scanned memory:%lu", __LINE__, __func__, idx, pfn, pfn_end, page_private(p), scanned_memory);
 	
 			zone_cur = page_zone(p);
 			spin_lock_irqsave(&zone_cur->lock, flags);
 			trace_guest_free_page_slowpath(pfn, free_page_obj[idx].order);
+	
 			if (PageCompound(p)) {
 				struct page *head_page = compound_head(p);
 				unsigned long head_pfn = page_to_pfn(head_page);
@@ -292,11 +266,7 @@ static void hinting_fn(unsigned int cpu)
 					reallocated_memory += alloc_pages * 4; 
 					scanned_memory += alloc_pages * 4; 
 				}
-				trace_guest_pfn_dump("Compound",
-					     head_pfn, alloc_pages);
 				pfn = head_pfn + alloc_pages;
-				if (hinting_debug == 1)
-					trace_printk("\n\t\t\t\t%d:%s Reallocated PFN:%lu is part of compound allocation with head PFN:%lu and order:%d", __LINE__, __func__, pfn, head_pfn, compound_order(head_page));
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
@@ -306,73 +276,66 @@ static void hinting_fn(unsigned int cpu)
 					reallocated_memory += 4;
 					scanned_memory += 4;
 				}
-				trace_guest_pfn_dump("Single", pfn, 1);
-				if (hinting_debug == 1)
-					trace_printk("\n\t\t\t\t%d:%s Reallocated PFN:%lu is part of single allocation", __LINE__, __func__, pfn);
 				pfn++;
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
 		
 			if (PageBuddy(p)) {
-//					ret = __isolate_free_page(p, page_private(p));
-					ret = 1;
+				int or = page_private(p);
+				ret = __isolate_free_page(p, page_private(p));
 				if (!ret) {
 						if (hinting_debug == 1) {
-							failed_isolation_memory += ((1 << page_private(p)) * 4); 
-							trace_printk("\n\t\t\t\t%d:%s Isolation failed for PFN:%lu order:%lu", __LINE__, __func__, pfn, page_private(p));
+							failed_isolation_memory += ((1 << or) * 4); 
 						}
-					} else {
-						guest_isolated_pages[hyp_idx].pfn =
-								pfn;
-						guest_isolated_pages[hyp_idx].pages =
-								1 << page_private(p);
-						trace_guest_isolated_pages(pfn, page_private(p));
-						hyp_idx += 1;
-						if (hinting_debug == 1) {
-							total_isolated_memory += ((1 << page_private(p)) * 4); 
-							trace_printk("\n\t\t\t\t%d:%s Isolation successful for PFN:%lu order:%lu hypervisor array idx:%d", __LINE__, __func__, pfn, page_private(p), hyp_idx);
-						}
+				} else {
+					guest_isolated_pages[hyp_idx].pfn =
+							pfn;
+					guest_isolated_pages[hyp_idx].pages =
+							1 << or;
+					guest_isolated_pages[hyp_idx].order = or;
+					hyp_idx += 1;
+					if (hinting_debug == 1) {
+						total_isolated_memory += ((1 << or) * 4); 
 					}
-				pfn = pfn + (1 << page_private(p));
+				}
+				pfn = pfn + (1 << or);
 				if (hinting_debug == 1)
-					scanned_memory += (1 << page_private(p)) * 4;
+					scanned_memory += (1 << or) * 4;
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
 			
 			struct page *buddy_page = get_buddy_page(p);
 			if (buddy_page != NULL) {
-//				ret = __isolate_free_page(buddy_page, page_private(buddy_page));
-				ret = 1;
+				int or = page_private(buddy_page);
+				ret = __isolate_free_page(buddy_page, page_private(buddy_page));
 				if (!ret) {
 					if (hinting_debug == 1) {
-						failed_isolation_memory += ((1 << page_private(buddy_page)) * 4);
-						trace_printk("\n\t\t\t\t%d:%s Isolation failed for PFN:%lu order:%lu", __LINE__, __func__, page_to_pfn(buddy_page), page_private(buddy_page));
+						failed_isolation_memory += ((1 << or) * 4);
 					}
 				} else {
 					guest_isolated_pages[hyp_idx].pfn =
 						page_to_pfn(buddy_page);
 					guest_isolated_pages[hyp_idx].pages =
-						1 << page_private(buddy_page);
-					trace_guest_isolated_pages(page_to_pfn(buddy_page), page_private(buddy_page));
+						1 << or;
+					guest_isolated_pages[hyp_idx].order = or;
+					trace_guest_isolated_pages(page_to_pfn(buddy_page), or);
 					hyp_idx += 1;
 					if (hinting_debug == 1) {
-						total_isolated_memory += ((1 << page_private(buddy_page)) * 4); 
-						tail_isolated_memory += ((1 << page_private(buddy_page)) * 4); 
-						trace_printk("\n\t\t\t\t%d:%s Isolation successful for PFN:%lu order:%lu hypervisor array idx:%d", __LINE__, __func__, pfn, page_private(p), hyp_idx);
+						total_isolated_memory += ((1 << or) * 4); 
+						tail_isolated_memory += ((1 << or) * 4); 
 					}
 				}
-				pfn = pfn + (1 << page_private(buddy_page));
+				pfn = page_to_pfn(buddy_page) + (1 << or);
 				if (hinting_debug == 1)
-					scanned_memory += (1 << page_private(buddy_page)) * 4;
+					scanned_memory += (1 << or) * 4;
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
 			if (hinting_debug == 1) {
 				scanned_memory += 4;
 				free_non_buddy_memory += 4;
-				trace_printk("\n\t\t\t\t%d:%s PFN:%lu is not reallocated nor it is a part of buddy", __LINE__, __func__, pfn);
 			}
 			spin_unlock_irqrestore(&zone_cur->lock, flags);
 			pfn++;
@@ -380,12 +343,10 @@ static void hinting_fn(unsigned int cpu)
 		free_page_obj[idx].pfn = 0;
 		free_page_obj[idx].order = -1;
 		free_page_obj[idx].zonenum = -1;
-		if (hinting_debug == 1)
-			trace_printk("\n\t\t\t%d:%s Reseting idx:%d pfn:%lu, order:%d and zonenum:%d", __LINE__, __func__, idx, free_page_obj[idx].pfn, free_page_obj[idx].order, free_page_obj[idx].zonenum);
 		idx++;
 	}
 	if (hyp_idx > 0) {
-//		hyperlist_ready(guest_isolated_pages, hyp_idx);
+		hyperlist_ready(guest_isolated_pages, hyp_idx);
 	}
 
 	*kvm_idx = 0;
@@ -429,11 +390,8 @@ void guest_free_page(struct page *page, int order)
 	free_page_idx = this_cpu_ptr(&kvm_pt_idx);
 	free_page_obj = this_cpu_ptr(kvm_pt);
 
-	if(order == 0)
-		zero_order_pages = zero_order_pages + 1;
 	if (strstr(current->comm, "test_basic_allo")) {
 		total_freed_memory += ((1 << order) * 4); 
-		trace_printk("\n%d:%s Page freed pfn:%lu order:%d total_freed_memory:%lu free_page_idx:%d", __LINE__, __func__, page_to_pfn(page), order, captured_freed_memory, *free_page_idx);	
 	}
 	
 	if (*free_page_idx != MAX_FGPT_ENTRIES) {
@@ -445,13 +403,10 @@ void guest_free_page(struct page *page, int order)
 		*free_page_idx += 1;
 		if (strstr(current->comm, "test_basic_allo")) {
 			captured_freed_memory += ((1 << order) * 4); 
-			trace_printk("\n%d:%s Free page pfn:%lu order:%d captured_freed_memory:%lu free_page_idx:%d", __LINE__, __func__, page_to_pfn(page), order, captured_freed_memory, *free_page_idx);	
-			trace_printk("\nzero_order_pages:%lu\n", zero_order_pages);
 		}
 
 		if (*free_page_idx == MAX_FGPT_ENTRIES) {
 			if (strstr(current->comm, "test_basic_allo")) {
-				trace_printk("\n\t%d:%s Waking up per cpu thread... free_page_idx:%d", __LINE__, __func__, *free_page_idx);
 				hinting_debug = 1;
 			}
 			wake_up_process(__this_cpu_read(hinting_task));
