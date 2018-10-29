@@ -7,6 +7,7 @@
 #include <linux/log2.h>
 #include <trace/events/kmem.h>
 #include <asm/current.h>
+#include <linux/kobject.h>
 
 /*
  * struct kvm_free_pages - Tracks the pages which are freed by the guest.
@@ -35,150 +36,35 @@ EXPORT_SYMBOL(guest_page_hinting_key);
 static DEFINE_MUTEX(hinting_mutex);
 int guest_page_hinting_flag;
 EXPORT_SYMBOL(guest_page_hinting_flag);
-unsigned long total_isolated_memory, failed_isolation_memory, tail_isolated_memory, guest_returned_memory, scanned_memory, buddy_skipped_memory;
-unsigned long captured_freed_memory, reallocated_memory, free_non_buddy_memory, total_freed_memory, pcpbulklist_memory, zero_order_pages, lrulist_memory;
-EXPORT_SYMBOL(captured_freed_memory);
-EXPORT_SYMBOL(total_freed_memory);
-EXPORT_SYMBOL(reallocated_memory);
-EXPORT_SYMBOL(free_non_buddy_memory);
-EXPORT_SYMBOL(total_isolated_memory);
-EXPORT_SYMBOL(tail_isolated_memory);
-EXPORT_SYMBOL(failed_isolation_memory);
-EXPORT_SYMBOL(guest_returned_memory);
-EXPORT_SYMBOL(scanned_memory);
-EXPORT_SYMBOL(buddy_skipped_memory);
-EXPORT_SYMBOL(pcpbulklist_memory);
-EXPORT_SYMBOL(lrulist_memory);
-EXPORT_SYMBOL(zero_order_pages);
+unsigned long total_freed, captured, scanned, total_isolated, tail_isolated, failed_isolation, reallocated, free_non_buddy, guest_returned;
 static DEFINE_PER_CPU(struct task_struct *, hinting_task);
-int hinting_debug;
+#define HINTING_ATTR_RO(_name) \
+        static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
 
-int count_zero_order_pages(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp,
-			 loff_t *ppos)
+static ssize_t hinting_memory_stats_show(struct kobject *kobj,
+                                    struct kobj_attribute *attr, char *buf)
 {
-	int ret;
-
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
-}
-int count_lrulist_memory(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp,
-			 loff_t *ppos)
-{
-	int ret;
-
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
-}
-int count_pcpbulklist_memory(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp,
-			 loff_t *ppos)
-{
-	int ret;
-
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
-}
-int count_guest_returned_memory(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp,
-			 loff_t *ppos)
-{
-	int ret;
-
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
-}
-int count_buddy_skipped_memory(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp,
-			 loff_t *ppos)
-{
-	int ret;
-
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
-}
-int count_scanned_memory(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp,
-			 loff_t *ppos)
-{
-	int ret;
-
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
+        return sprintf(buf, "total_freed_memory:%lu\ncaptued_memory:%lu\n"
+		       "scanned_memory:%lu\ntotal_isolated_memory:%lu\n"
+		       "tail_isolated_memory:%lu\nfailed_isolation_memory:%lu\n"
+		       "reallocated_memory:%lu\nfree_non_buddy_memory:%lu\n"
+		       "guest_returned_memory:%lu\n", total_freed, captured,
+		       scanned, total_isolated, tail_isolated,
+		       failed_isolation, reallocated,
+		       free_non_buddy, guest_returned);
 }
 
-int count_total_freed_memory(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp,
-			 loff_t *ppos)
-{
-	int ret;
+HINTING_ATTR_RO(hinting_memory_stats);
 
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
-}
+static struct attribute *hinting_attrs[] = {
+        &hinting_memory_stats_attr.attr,
+	NULL,
+};
 
-int count_captured_freed_memory(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp,
-			 loff_t *ppos)
-{
-	int ret;
-
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
-}
-
-int count_reallocated_memory(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp,
-			 loff_t *ppos)
-{
-	int ret;
-
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
-}
-
-int count_free_non_buddy_memory(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp,
-			 loff_t *ppos)
-{
-	int ret;
-
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
-}
-
-int count_tail_isolated_memory(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp,
-			 loff_t *ppos)
-{
-	int ret;
-
-	trace_guest_str_dump("count_isolated_pages");
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
-}
-int count_total_isolated_memory(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp,
-			 loff_t *ppos)
-{
-	int ret;
-
-	trace_guest_str_dump("count_isolated_pages");
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
-}
-
-int count_failed_isolations_memory(struct ctl_table *table, int write,
-			    void __user *buffer, size_t *lenp,
-			    loff_t *ppos)
-{
-	int ret;
-
-	trace_guest_str_dump("count_failed_isolations");
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
-	return ret;
-}
+static const struct attribute_group hinting_attr_group = {
+        .attrs = hinting_attrs,
+        .name = "hinting",
+};
 
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp,
@@ -203,16 +89,13 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 {
 	int i = 0;
 	unsigned long mem = 0;
-	u64 gvaddr = (u64) &guest_isolated_pages[0];
 
 	request_hypercall(balloon_ptr, (u64)&guest_isolated_pages[0], entries);
 	while (i < entries) {
 		struct page *p = pfn_to_page(guest_isolated_pages[i].pfn);
 		
-		if (hinting_debug == 1) {
-			mem = (1 << guest_isolated_pages[i].order) * 4;
-			guest_returned_memory += mem;	
-		}
+		mem = (1 << guest_isolated_pages[i].order) * 4;
+		guest_returned += mem;	
 		int mt = get_pageblock_migratetype(p);
         	__free_one_page(p, page_to_pfn(p), page_zone(p), guest_isolated_pages[i].order, mt);
 		i++;
@@ -262,20 +145,16 @@ static void hinting_fn(unsigned int cpu)
 				unsigned int alloc_pages =
 					1 << compound_order(head_page);
 
-				if (hinting_debug == 1) {
-					reallocated_memory += alloc_pages * 4; 
-					scanned_memory += alloc_pages * 4; 
-				}
+				reallocated += alloc_pages * 4; 
+				scanned += alloc_pages * 4; 
 				pfn = head_pfn + alloc_pages;
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
 		
 			if (page_ref_count(p)) {
-				if (hinting_debug == 1) {
-					reallocated_memory += 4;
-					scanned_memory += 4;
-				}
+				reallocated += 4;
+				scanned += 4;
 				pfn++;
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
@@ -285,9 +164,7 @@ static void hinting_fn(unsigned int cpu)
 				int or = page_private(p);
 				ret = __isolate_free_page(p, page_private(p));
 				if (!ret) {
-						if (hinting_debug == 1) {
-							failed_isolation_memory += ((1 << or) * 4); 
-						}
+					failed_isolation += ((1 << or) * 4); 
 				} else {
 					guest_isolated_pages[hyp_idx].pfn =
 							pfn;
@@ -295,13 +172,10 @@ static void hinting_fn(unsigned int cpu)
 							1 << or;
 					guest_isolated_pages[hyp_idx].order = or;
 					hyp_idx += 1;
-					if (hinting_debug == 1) {
-						total_isolated_memory += ((1 << or) * 4); 
-					}
+					total_isolated += ((1 << or) * 4); 
 				}
 				pfn = pfn + (1 << or);
-				if (hinting_debug == 1)
-					scanned_memory += (1 << or) * 4;
+				scanned += (1 << or) * 4;
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
@@ -311,9 +185,7 @@ static void hinting_fn(unsigned int cpu)
 				int or = page_private(buddy_page);
 				ret = __isolate_free_page(buddy_page, page_private(buddy_page));
 				if (!ret) {
-					if (hinting_debug == 1) {
-						failed_isolation_memory += ((1 << or) * 4);
-					}
+					failed_isolation += ((1 << or) * 4);
 				} else {
 					guest_isolated_pages[hyp_idx].pfn =
 						page_to_pfn(buddy_page);
@@ -322,21 +194,16 @@ static void hinting_fn(unsigned int cpu)
 					guest_isolated_pages[hyp_idx].order = or;
 					trace_guest_isolated_pages(page_to_pfn(buddy_page), or);
 					hyp_idx += 1;
-					if (hinting_debug == 1) {
-						total_isolated_memory += ((1 << or) * 4); 
-						tail_isolated_memory += ((1 << or) * 4); 
-					}
+					total_isolated += ((1 << or) * 4); 
+					tail_isolated += ((1 << or) * 4); 
 				}
 				pfn = page_to_pfn(buddy_page) + (1 << or);
-				if (hinting_debug == 1)
-					scanned_memory += (1 << or) * 4;
+				scanned += (1 << or) * 4;
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
-			if (hinting_debug == 1) {
-				scanned_memory += 4;
-				free_non_buddy_memory += 4;
-			}
+			scanned += 4;
+			free_non_buddy += 4;
 			spin_unlock_irqrestore(&zone_cur->lock, flags);
 			pfn++;
 		}
@@ -353,7 +220,6 @@ static void hinting_fn(unsigned int cpu)
 	put_cpu_var(hypervisor_pagelist);
 	put_cpu_var(kvm_pt);
 	put_cpu_var(kvm_pt_idx);
-	hinting_debug = 0;
 }
 
 static int hinting_should_run(unsigned int cpu)
@@ -375,10 +241,12 @@ struct smp_hotplug_thread hinting_threads = {
 };
 EXPORT_SYMBOL(hinting_threads);
 
+int sys_init_cnt;
 void guest_free_page(struct page *page, int order)
 {
 	unsigned long flags;
 	int *free_page_idx;
+	int err = 0;
 	struct kvm_free_pages *free_page_obj;
 	/*
 	 * use of global variables may trigger a race condition between irq and
@@ -390,9 +258,14 @@ void guest_free_page(struct page *page, int order)
 	free_page_idx = this_cpu_ptr(&kvm_pt_idx);
 	free_page_obj = this_cpu_ptr(kvm_pt);
 
-	if (strstr(current->comm, "test_basic_allo")) {
-		total_freed_memory += ((1 << order) * 4); 
+	if(sys_init_cnt == 0) {
+	        err = sysfs_create_group(mm_kobj, &hinting_attr_group);
+        	if (err) {
+                	pr_err("hinting: register sysfs failed\n");
+        	}
+		sys_init_cnt = 1;
 	}
+	total_freed += ((1 << order) * 4); 
 	
 	if (*free_page_idx != MAX_FGPT_ENTRIES) {
 		disable_page_poisoning();
@@ -401,14 +274,9 @@ void guest_free_page(struct page *page, int order)
 		free_page_obj[*free_page_idx].zonenum = page_zonenum(page);
 		free_page_obj[*free_page_idx].order = order;
 		*free_page_idx += 1;
-		if (strstr(current->comm, "test_basic_allo")) {
-			captured_freed_memory += ((1 << order) * 4); 
-		}
+		captured += ((1 << order) * 4); 
 
 		if (*free_page_idx == MAX_FGPT_ENTRIES) {
-			if (strstr(current->comm, "test_basic_allo")) {
-				hinting_debug = 1;
-			}
 			wake_up_process(__this_cpu_read(hinting_task));
 		}
 	}
