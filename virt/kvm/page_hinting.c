@@ -155,16 +155,16 @@ static void hinting_fn(unsigned int cpu)
 				unsigned int alloc_pages =
 					1 << compound_order(head_page);
 
-				reallocated += (alloc_pages * 4 ); 
-				scanned += (alloc_pages * 4 ); 
+				reallocated += (alloc_pages * 4); 
+				scanned += (alloc_pages * 4); 
 				pfn = head_pfn + alloc_pages;
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
 		
 			if (page_ref_count(page)) {
-				reallocated += (4 );
-				scanned += (4 );
+				reallocated += (4);
+				scanned += (4);
 				pfn++;
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
@@ -174,7 +174,7 @@ static void hinting_fn(unsigned int cpu)
 				int or = page_private(page);
 				ret = __isolate_free_page(page, page_private(page));
 				if (!ret) {
-					failed_isolation += ((1 << or) * 4 ); 
+					failed_isolation += ((1 << or) * 4); 
 				} else {
 					page_hinting_obj->hypervisor_pagelist[hyp_idx].pfn =
 							pfn;
@@ -185,7 +185,7 @@ static void hinting_fn(unsigned int cpu)
 					total_isolated += (((1 << or) * 4) ); 
 				}
 				pfn = pfn + (1 << or);
-				scanned += ((1 << or) * 4 );
+				scanned += ((1 << or) * 4);
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
@@ -208,12 +208,12 @@ static void hinting_fn(unsigned int cpu)
 					tail_isolated += (((1 << or) * 4) );
 				}
 				pfn = page_to_pfn(buddy_page) + (1 << or);
-				scanned += ((1 << or) * 4 );
+				scanned += ((1 << or) * 4);
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
-			scanned += (4 );
-			free_non_buddy += (4 );
+			scanned += (4);
+			free_non_buddy += (4);
 			spin_unlock_irqrestore(&zone_cur->lock, flags);
 			pfn++;
 		}
@@ -283,6 +283,7 @@ void guest_free_page(struct page *page, int order)
 		captured += (((1 << order) * 4) ); 
 
 		if (page_hinting_obj->kvm_pt_idx == MAX_FGPT_ENTRIES) {
+			drain_local_pages(NULL);
 			wake_up_process(__this_cpu_read(hinting_task));
 		}
 	}
