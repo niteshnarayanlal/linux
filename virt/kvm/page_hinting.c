@@ -108,9 +108,9 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 		struct page *page = pfn_to_page(guest_isolated_pages[i].pfn);
 		
 		mem = (1 << guest_isolated_pages[i].order) * 4;
-		guest_returned += mem ;	
+		guest_returned += mem;	
 		mt = get_pageblock_migratetype(page);
-        	__free_one_page(page, page_to_pfn(page), page_zone(page), guest_isolated_pages[i].order, mt);
+		free_one_page(page_zone(page), page, page_to_pfn(page), guest_isolated_pages[i].order, mt);
 		i++;
 	}
 }

@@ -27,10 +27,10 @@ int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 void guest_free_page(struct page *page, int order);
 extern int __isolate_free_page(struct page *page, unsigned int order);
 
-extern void __free_one_page(struct page *page,
-                unsigned long pfn,
-                struct zone *zone, unsigned int order,
-                int migratetype);
+extern void free_one_page(struct zone *zone,
+                                struct page *page, unsigned long pfn,
+                                unsigned int order,
+                                int migratetype);
 
 static inline void disable_page_poisoning(void)
 {
