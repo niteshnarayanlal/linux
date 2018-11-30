@@ -27,6 +27,7 @@ struct page_hinting {
 	struct kvm_free_pages kvm_pt[MAX_FGPT_ENTRIES];
 	int kvm_pt_idx;
 	struct hypervisor_pages hypervisor_pagelist[MAX_FGPT_ENTRIES];
+	int hyp_idx;
 };
 DEFINE_PER_CPU(struct page_hinting, hinting_obj);
 
@@ -132,7 +133,7 @@ struct page* get_buddy_page(struct page *page)
 
 static void hinting_fn(unsigned int cpu)
 {
-	int idx = 0, ret = 0, hyp_idx = 0;
+	int idx = 0, ret = 0;
 	struct page_hinting *page_hinting_obj = &get_cpu_var(hinting_obj);
 	struct zone *zone_cur;
 	unsigned long flags = 0;
@@ -176,12 +177,12 @@ static void hinting_fn(unsigned int cpu)
 				if (!ret) {
 					failed_isolation += ((1 << or) * 4); 
 				} else {
-					page_hinting_obj->hypervisor_pagelist[hyp_idx].pfn =
+					page_hinting_obj->hypervisor_pagelist[page_hinting_obj->hyp_idx].pfn =
 							pfn;
-					page_hinting_obj->hypervisor_pagelist[hyp_idx].pages =
+					page_hinting_obj->hypervisor_pagelist[page_hinting_obj->hyp_idx].pages =
 							1 << or;
-					page_hinting_obj->hypervisor_pagelist[hyp_idx].order = or;
-					hyp_idx += 1;
+					page_hinting_obj->hypervisor_pagelist[page_hinting_obj->hyp_idx].order = or;
+					page_hinting_obj->hyp_idx += 1;
 					total_isolated += (((1 << or) * 4) ); 
 				}
 				pfn = pfn + (1 << or);
@@ -197,13 +198,13 @@ static void hinting_fn(unsigned int cpu)
 				if (!ret) {
 					failed_isolation += (((1 << or) * 4) );
 					} else {
-					page_hinting_obj->hypervisor_pagelist[hyp_idx].pfn =
+					page_hinting_obj->hypervisor_pagelist[page_hinting_obj->hyp_idx].pfn =
 						page_to_pfn(buddy_page);
-					page_hinting_obj->hypervisor_pagelist[hyp_idx].pages =
+					page_hinting_obj->hypervisor_pagelist[page_hinting_obj->hyp_idx].pages =
 						1 << or;
-					page_hinting_obj->hypervisor_pagelist[hyp_idx].order = or;
+					page_hinting_obj->hypervisor_pagelist[page_hinting_obj->hyp_idx].order = or;
 					trace_guest_isolated_pages(page_to_pfn(buddy_page), or);
-					hyp_idx += 1;
+					page_hinting_obj->hyp_idx += 1;
 					total_isolated += (((1 << or) * 4) );
 					tail_isolated += (((1 << or) * 4) );
 				}
@@ -222,8 +223,9 @@ static void hinting_fn(unsigned int cpu)
 		page_hinting_obj->kvm_pt[idx].zonenum = -1;
 		idx++;
 	}
-	if (hyp_idx > 0) {
-		hyperlist_ready(page_hinting_obj->hypervisor_pagelist, hyp_idx);
+	if (page_hinting_obj->hyp_idx > 50) {
+		hyperlist_ready(page_hinting_obj->hypervisor_pagelist, page_hinting_obj->hyp_idx);
+		page_hinting_obj->hyp_idx = 0;
 	}
 
 	page_hinting_obj->kvm_pt_idx = 0;
