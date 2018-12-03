@@ -223,13 +223,82 @@ static void hinting_fn(unsigned int cpu)
 		page_hinting_obj->kvm_pt[idx].zonenum = -1;
 		idx++;
 	}
-	if (page_hinting_obj->hyp_idx > 50) {
+	if (page_hinting_obj->hyp_idx > 500) {
 		hyperlist_ready(page_hinting_obj->hypervisor_pagelist, page_hinting_obj->hyp_idx);
 		page_hinting_obj->hyp_idx = 0;
 	}
 
 	page_hinting_obj->kvm_pt_idx = 0;
 	put_cpu_var(hinting_obj);
+}
+
+int if_exist(struct page *page)
+{
+	int i = 0;
+	struct page_hinting *page_hinting_obj = this_cpu_ptr(&hinting_obj);
+	while (i < MAX_FGPT_ENTRIES) {
+		if (page_to_pfn(page) == page_hinting_obj->kvm_pt[i].pfn)
+			return 1;
+		i++;
+	}
+	return 0;
+}
+
+
+void pack_array(void)
+{
+	int i = 0, j = 0;
+	struct page_hinting *page_hinting_obj = this_cpu_ptr(&hinting_obj);
+	
+	while (i < MAX_FGPT_ENTRIES) {
+		if (page_hinting_obj->kvm_pt[i].pfn != 0) {
+			if (i != j) {
+				page_hinting_obj->kvm_pt[j].pfn =
+						page_hinting_obj->kvm_pt[i].pfn;
+				page_hinting_obj->kvm_pt[j].order =
+						page_hinting_obj->kvm_pt[i].order;
+				page_hinting_obj->kvm_pt[j].zonenum =
+						page_hinting_obj->kvm_pt[i].zonenum;
+			}
+			j++;
+		}
+		i++;
+	}
+	i = j;
+	page_hinting_obj->kvm_pt_idx = j;
+	while (j < MAX_FGPT_ENTRIES) {
+		page_hinting_obj->kvm_pt[j].pfn = 0;
+		page_hinting_obj->kvm_pt[j].order = -1;
+		page_hinting_obj->kvm_pt[j].zonenum = -1;
+		j++;
+	}
+}
+
+void scan_array(void)
+{
+	int i = 0;
+	struct page_hinting *page_hinting_obj = this_cpu_ptr(&hinting_obj);
+	while (i < MAX_FGPT_ENTRIES) {
+		struct page *page = pfn_to_page(page_hinting_obj->kvm_pt[i].pfn);
+		struct page *buddy_page = get_buddy_page(page);
+		if(!PageBuddy(page) && buddy_page != NULL) {
+			if (if_exist(buddy_page)) {
+				page_hinting_obj->kvm_pt[i].pfn = 0;
+				page_hinting_obj->kvm_pt[i].order = -1;
+				page_hinting_obj->kvm_pt[i].zonenum = -1;
+			}
+			else {	
+				page_hinting_obj->kvm_pt[i].pfn = page_to_pfn(buddy_page);
+				page_hinting_obj->kvm_pt[i].order = page_private(buddy_page);
+			}
+		}
+
+		i++;
+	}
+	pack_array();
+	if (page_hinting_obj->kvm_pt_idx == MAX_FGPT_ENTRIES)
+		wake_up_process(__this_cpu_read(hinting_task));
+	return;
 }
 
 static int hinting_should_run(unsigned int cpu)
@@ -286,7 +355,8 @@ void guest_free_page(struct page *page, int order)
 
 		if (page_hinting_obj->kvm_pt_idx == MAX_FGPT_ENTRIES) {
 			drain_local_pages(NULL);
-			wake_up_process(__this_cpu_read(hinting_task));
+			scan_array();
+			//wake_up_process(__this_cpu_read(hinting_task));
 		}
 	}
 	local_irq_restore(flags);
