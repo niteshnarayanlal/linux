@@ -223,7 +223,7 @@ static void hinting_fn(unsigned int cpu)
 		page_hinting_obj->kvm_pt[idx].zonenum = -1;
 		idx++;
 	}
-	if (page_hinting_obj->hyp_idx > 500) {
+	if (page_hinting_obj->hyp_idx > 0) {
 		hyperlist_ready(page_hinting_obj->hypervisor_pagelist, page_hinting_obj->hyp_idx);
 		page_hinting_obj->hyp_idx = 0;
 	}
