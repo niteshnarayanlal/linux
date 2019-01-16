@@ -466,6 +466,8 @@ static inline void arch_alloc_page(struct page *page, int order)
 
 static inline void arch_free_page(struct page *page, int order)
 {
+	if (!static_branch_unlikely(&guest_page_hinting_key))
+		return;
 	guest_free_page(page, order);
 }
 #endif
