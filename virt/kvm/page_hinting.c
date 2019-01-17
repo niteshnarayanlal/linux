@@ -41,6 +41,40 @@ EXPORT_SYMBOL(request_hypercall);
 void *balloon_ptr;
 EXPORT_SYMBOL(balloon_ptr);
 
+unsigned long total_freed, captured, scanned, total_isolated, tail_isolated;
+unsigned long failed_isolation, reallocated, free_non_buddy, guest_returned;
+int sys_init_cnt;
+
+#ifdef CONFIG_SYSFS
+#define HINTING_ATTR_RO(_name) \
+        static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
+
+static ssize_t hinting_memory_stats_show(struct kobject *kobj,
+                                    struct kobj_attribute *attr, char *buf)
+{
+        return sprintf(buf, "total_freed_memory:%lu KB\ncaptued_memory:%lu KB\n"
+		       "scanned_memory:%lu KB\ntotal_isolated_memory:%lu KB\n"
+		       "tail_isolated_memory:%lu KB\nfailed_isolation_memory:%lu KB\n"
+		       "reallocated_memory:%lu KB\nfree_non_buddy_memory:%lu KB\n"
+		       "guest_returned_memory:%lu KB\n", total_freed, captured,
+		       scanned, total_isolated, tail_isolated,
+		       failed_isolation, reallocated,
+		       free_non_buddy, guest_returned);
+}
+
+HINTING_ATTR_RO(hinting_memory_stats);
+
+static struct attribute *hinting_attrs[] = {
+        &hinting_memory_stats_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group hinting_attr_group = {
+        .attrs = hinting_attrs,
+        .name = "hinting",
+};
+#endif
+
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp,
 			      loff_t *ppos)
@@ -61,11 +95,14 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 {
 	int i = 0;
 	int mt = 0;
+	unsigned long mem = 0;
 
 	request_hypercall(balloon_ptr, (u64)&guest_isolated_pages[0], entries);
 	while (i < entries) {
 		struct page *page = pfn_to_page(guest_isolated_pages[i].pfn);
 
+		mem = (1 << guest_isolated_pages[i].order) * 4;
+		guest_returned += mem;
 		mt = get_pageblock_migratetype(page);
 		free_one_page(page_zone(page), page, page_to_pfn(page),
 			      guest_isolated_pages[i].order, mt);
@@ -113,12 +150,16 @@ static void hinting_fn(unsigned int cpu)
 					1 << compound_order(head_page);
 
 				pfn = head_pfn + alloc_pages;
+				reallocated += (alloc_pages * 4);
+				scanned += (alloc_pages * 4);
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
 
 			if (page_ref_count(page)) {
 				pfn++;
+				reallocated += (4);
+				scanned += (4);
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
@@ -128,6 +169,8 @@ static void hinting_fn(unsigned int cpu)
 
 				ret = __isolate_free_page(page, buddy_order);
 				if (!ret) {
+					failed_isolation +=
+						((1 << buddy_order) * 4);
 				} else {
 					int l_idx = page_hinting_obj->hyp_idx;
 					struct hypervisor_pages *l_obj =
@@ -139,9 +182,12 @@ static void hinting_fn(unsigned int cpu)
 								 buddy_pages);
 					l_obj[l_idx].pfn = pfn;
 					l_obj[l_idx].order = buddy_order;
+					total_isolated += (((1 << buddy_order) * 4));
+					tail_isolated += (((1 << buddy_order) * 4));
 					page_hinting_obj->hyp_idx += 1;
 				}
 				pfn = pfn + (1 << buddy_order);
+				scanned += ((1 << buddy_order) * 4);
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
@@ -153,6 +199,8 @@ static void hinting_fn(unsigned int cpu)
 				ret = __isolate_free_page(buddy_page,
 							  buddy_order);
 				if (!ret) {
+					failed_isolation +=
+						((1 << buddy_order) * 4); 
 				} else {
 					int l_idx = page_hinting_obj->hyp_idx;
 					struct hypervisor_pages *l_obj =
@@ -166,13 +214,18 @@ static void hinting_fn(unsigned int cpu)
 								 buddy_pages);
 					l_obj[l_idx].pfn = buddy_pfn;
 					l_obj[l_idx].order = buddy_order;
+					total_isolated += (((1 << buddy_order) * 4));
+					tail_isolated += (((1 << buddy_order) * 4));
 					page_hinting_obj->hyp_idx += 1;
 				}
 				pfn = page_to_pfn(buddy_page) +
 					(1 << buddy_order);
+				scanned += ((1 << buddy_order) * 4);
 				spin_unlock_irqrestore(&zone_cur->lock, flags);
 				continue;
 			}
+			scanned += (4);
+			free_non_buddy += (4);
 			spin_unlock_irqrestore(&zone_cur->lock, flags);
 			pfn++;
 		}
@@ -285,6 +338,7 @@ void guest_free_page(struct page *page, int order)
 {
 	unsigned long flags;
 	struct page_hinting *page_hinting_obj = this_cpu_ptr(&hinting_obj);
+	int err = 0;
 	/*
 	 * use of global variables may trigger a race condition between irq and
 	 * process context causing unwanted overwrites. This will be replaced
@@ -292,6 +346,14 @@ void guest_free_page(struct page *page, int order)
 	 */
 
 	local_irq_save(flags);
+	if(sys_init_cnt == 0) {
+	        err = sysfs_create_group(mm_kobj, &hinting_attr_group);
+        	if (err) {
+                	pr_err("hinting: register sysfs failed\n");
+        	}
+		sys_init_cnt = 1;
+	}
+	total_freed += (((1 << order) * 4)); 
 	if (page_hinting_obj->kvm_pt_idx != MAX_FGPT_ENTRIES) {
 		disable_page_poisoning();
 		trace_guest_free_page(page, order);
@@ -302,6 +364,8 @@ void guest_free_page(struct page *page, int order)
 		page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].order =
 							order;
 		page_hinting_obj->kvm_pt_idx += 1;
+		captured += (((1 << order) * 4)); 
+
 		if (page_hinting_obj->kvm_pt_idx == MAX_FGPT_ENTRIES) {
 			drain_local_pages(NULL);
 			scan_array();
