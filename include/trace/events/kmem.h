@@ -315,6 +315,46 @@ TRACE_EVENT(mm_page_alloc_extfrag,
 		__entry->change_ownership)
 );
 
+TRACE_EVENT(guest_free_page,
+	    TP_PROTO(struct page *page, unsigned int order),
+
+	TP_ARGS(page, order),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, order)
+	),
+
+	TP_fast_assign(
+		__entry->pfn            = page_to_pfn(page);
+		__entry->order          = order;
+	),
+
+	TP_printk("page=%p pfn=%lu number of pages=%d",
+		  pfn_to_page(__entry->pfn),
+		  __entry->pfn,
+		  (1 << __entry->order))
+);
+
+TRACE_EVENT(guest_isolated_pfn,
+	    TP_PROTO(unsigned long pfn, unsigned int pages),
+
+	TP_ARGS(pfn, pages),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, pages)
+	),
+
+	TP_fast_assign(
+		__entry->pfn            = pfn;
+		__entry->pages          = pages;
+	),
+
+	TP_printk("pfn=%lu number of pages=%u",
+		  __entry->pfn,
+		  __entry->pages)
+);
 #endif /* _TRACE_KMEM_H */
 
 /* This part must be outside protection */
