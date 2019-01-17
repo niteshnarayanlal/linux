@@ -284,6 +284,7 @@ void guest_free_page(struct page *page, int order)
 
 	local_irq_save(flags);
 	if (page_hinting_obj->kvm_pt_idx != MAX_FGPT_ENTRIES) {
+		disable_page_poisoning();
 		page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].pfn =
 							page_to_pfn(page);
 		page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].zonenum =
