@@ -1,3 +1,5 @@
+#include <linux/smpboot.h>
+
 #define MAX_FGPT_ENTRIES	1000
 /*
  * hypervisor_pages - It is a dummy structure passed with the hypercall.
@@ -13,6 +15,7 @@ struct hypervisor_pages {
 
 extern int guest_page_hinting_flag;
 extern struct static_key_false guest_page_hinting_key;
+extern struct smp_hotplug_thread hinting_threads;
 
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp, loff_t *ppos);
