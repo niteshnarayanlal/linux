@@ -16,7 +16,14 @@ struct hypervisor_pages {
 extern int guest_page_hinting_flag;
 extern struct static_key_false guest_page_hinting_key;
 extern struct smp_hotplug_thread hinting_threads;
+extern void (*request_hypercall)(void *, u64, int);
+extern void *balloon_ptr;
 
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp, loff_t *ppos);
 void guest_free_page(struct page *page, int order);
+extern int __isolate_free_page(struct page *page, unsigned int order);
+extern void free_one_page(struct zone *zone,
+			  struct page *page, unsigned long pfn,
+			  unsigned int order,
+			  int migratetype);
