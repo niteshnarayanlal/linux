@@ -18,6 +18,7 @@ extern struct static_key_false guest_page_hinting_key;
 extern struct smp_hotplug_thread hinting_threads;
 extern void (*request_hypercall)(void *, u64, int);
 extern void *balloon_ptr;
+extern bool want_page_poisoning;
 
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp, loff_t *ppos);
@@ -27,3 +28,10 @@ extern void free_one_page(struct zone *zone,
 			  struct page *page, unsigned long pfn,
 			  unsigned int order,
 			  int migratetype);
+
+static inline void disable_page_poisoning(void)
+{
+#ifdef CONFIG_PAGE_POISONING
+	want_page_poisoning = 0;
+#endif
+}
