@@ -132,7 +132,6 @@ static void tell_host_one_page(struct virtio_balloon *vb, struct virtqueue *vq,
 	u64 gpaddr = virt_to_phys((void *)gvaddr);
 
 	virtqueue_add_chain_desc(vq, gpaddr, len, &id, &id, 0);
-	virtqueue_add_chain(vq, id, 0, NULL, (void *)gpaddr, NULL);
 }
 
 void virtballoon_page_hinting(struct virtio_balloon *vb, u64 gvaddr,

@@ -1821,8 +1821,27 @@ retry:
 
 	vq->vq.num_free--;
 	vq->free_head = virtio16_to_cpu(_vq->vdev, desc[i].next);
-	END_USE(vq);
+//	END_USE(vq);
+	//virtqueue_add_chain(_vq, *head_id, 0, NULL, (void *)addr, NULL);
+	unsigned int head = *head_id;
+        bool indirect = 0;
+        struct vring_desc *indir_desc = NULL;
+        void *data = (void *) addr;
+        void *ctx = NULL;
+	int avail_idx;
 
+	vq->split.desc_state[head].data = data;
+	if (indirect)
+		vq->split.desc_state[head].indir_desc = indir_desc;
+	if (ctx)
+		vq->split.desc_state[head].indir_desc = ctx;
+
+	vq->split.avail_idx_shadow = 1;
+	avail_idx = vq->split.avail_idx_shadow;
+	vq->split.vring.avail->idx = cpu_to_virtio16(_vq->vdev, avail_idx);
+	vq->num_added = 1;
+	END_USE(vq);
+	virtqueue_kick_sync(_vq);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(virtqueue_add_chain_desc);
