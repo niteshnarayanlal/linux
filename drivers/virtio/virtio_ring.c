@@ -1784,25 +1784,6 @@ retry:
 		return -EIO;
 	}
 
-	if (vq->vq.num_free < 1) {
-		/*
-		 * If there is no desc avail in the vq, so kick what is
-		 * already added, and re-start to build a new chain for
-		 * the passed sg.
-		 */
-		if (likely(*head_id != VIRTQUEUE_DESC_ID_INIT)) {
-			END_USE(vq);
-			virtqueue_add_chain(_vq, *head_id, 0, NULL, vq, NULL);
-			virtqueue_kick_sync(_vq);
-			*head_id = VIRTQUEUE_DESC_ID_INIT;
-			*prev_id = VIRTQUEUE_DESC_ID_INIT;
-			goto retry;
-		} else {
-			END_USE(vq);
-			return -ENOSPC;
-		}
-	}
-
 	i = vq->free_head;
 	flags &= ~VRING_DESC_F_NEXT;
 	desc[i].flags = cpu_to_virtio16(_vq->vdev, flags);
