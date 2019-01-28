@@ -1773,6 +1773,9 @@ int virtqueue_add_chain_desc(struct virtqueue *_vq,
 	struct vring_desc *desc = vq->split.vring.desc;
 	u16 flags = in ? VRING_DESC_F_WRITE : 0;
 	unsigned int i;
+	unsigned int head = *head_id;
+        void *data = (void *) addr;
+	int avail_idx;
 
 	/* Sanity check */
 	if (!_vq || !head_id || !prev_id)
@@ -1802,20 +1805,11 @@ retry:
 
 	vq->vq.num_free--;
 	vq->free_head = virtio16_to_cpu(_vq->vdev, desc[i].next);
-//	END_USE(vq);
-	//virtqueue_add_chain(_vq, *head_id, 0, NULL, (void *)addr, NULL);
-	unsigned int head = *head_id;
-        bool indirect = 0;
-        struct vring_desc *indir_desc = NULL;
-        void *data = (void *) addr;
-        void *ctx = NULL;
-	int avail_idx;
+
+	head = *head_id;
+        data = (void *) addr;
 
 	vq->split.desc_state[head].data = data;
-	if (indirect)
-		vq->split.desc_state[head].indir_desc = indir_desc;
-	if (ctx)
-		vq->split.desc_state[head].indir_desc = ctx;
 
 	vq->split.avail_idx_shadow = 1;
 	avail_idx = vq->split.avail_idx_shadow;
