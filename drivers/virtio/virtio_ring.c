@@ -1773,14 +1773,13 @@ int virtqueue_add_chain_desc(struct virtqueue *_vq,
 	struct vring_desc *desc = vq->split.vring.desc;
 	u16 flags = in ? VRING_DESC_F_WRITE : 0;
 	unsigned int i;
-	unsigned int head = *head_id;
+	unsigned int head;
         void *data = (void *) addr;
 	int avail_idx;
 
 	/* Sanity check */
 	if (!_vq || !head_id || !prev_id)
 		return -EINVAL;
-retry:
 	START_USE(vq);
 	if (unlikely(vq->broken)) {
 		END_USE(vq);
@@ -1793,12 +1792,6 @@ retry:
 	desc[i].addr = cpu_to_virtio64(_vq->vdev, addr);
 	desc[i].len = cpu_to_virtio32(_vq->vdev, len);
 
-	/* Add the desc to the end of the chain */
-	if (*prev_id != VIRTQUEUE_DESC_ID_INIT) {
-		desc[*prev_id].next = cpu_to_virtio16(_vq->vdev, i);
-		desc[*prev_id].flags |= cpu_to_virtio16(_vq->vdev,
-							VRING_DESC_F_NEXT);
-	}
 	*prev_id = i;
 	if (*head_id == VIRTQUEUE_DESC_ID_INIT)
 		*head_id = *prev_id;
