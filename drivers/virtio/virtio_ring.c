@@ -1792,15 +1792,12 @@ int virtqueue_add_chain_desc(struct virtqueue *_vq,
 	desc[i].addr = cpu_to_virtio64(_vq->vdev, addr);
 	desc[i].len = cpu_to_virtio32(_vq->vdev, len);
 
-	*prev_id = i;
-	if (*head_id == VIRTQUEUE_DESC_ID_INIT)
-		*head_id = *prev_id;
-
+	*head_id = i;
+	
 	vq->vq.num_free--;
 	vq->free_head = virtio16_to_cpu(_vq->vdev, desc[i].next);
 
 	head = *head_id;
-        data = (void *) addr;
 
 	vq->split.desc_state[head].data = data;
 
