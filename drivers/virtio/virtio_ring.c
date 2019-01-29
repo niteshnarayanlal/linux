@@ -1696,6 +1696,56 @@ static inline int virtqueue_add(struct virtqueue *_vq,
 }
 
 /**
+ * virtqueue_add_desc - add a buffer to a chain using a vring desc
+ * @vq: the struct virtqueue we're talking about.
+ * @addr: address of the buffer to add.
+ * @len: length of the buffer.
+ * @in: set if the buffer is for the device to write.
+ *
+ * Caller must ensure we don't call this with other virtqueue operations
+ * at the same time (except where noted).
+ *
+ * Returns zero or a negative error (ie. ENOSPC, ENOMEM, EIO).
+ */
+int virtqueue_add_desc(struct virtqueue *_vq, u64 addr, u32 len, int in)
+{
+	struct vring_virtqueue *vq = to_vvq(_vq);
+	struct vring_desc *desc = vq->split.vring.desc;
+	u16 flags = in ? VRING_DESC_F_WRITE : 0;
+	unsigned int i;
+	void *data = (void *)addr;
+	int avail_idx;
+
+	/* Sanity check */
+	if (!_vq)
+		return -EINVAL;
+
+	START_USE(vq);
+	if (unlikely(vq->broken)) {
+		END_USE(vq);
+		return -EIO;
+	}
+
+	i = vq->free_head;
+	flags &= ~VRING_DESC_F_NEXT;
+	desc[i].flags = cpu_to_virtio16(_vq->vdev, flags);
+	desc[i].addr = cpu_to_virtio64(_vq->vdev, addr);
+	desc[i].len = cpu_to_virtio32(_vq->vdev, len);
+
+	vq->vq.num_free--;
+	vq->free_head = virtio16_to_cpu(_vq->vdev, desc[i].next);
+	vq->split.desc_state[i].data = data;
+	vq->split.avail_idx_shadow = 1;
+	avail_idx = vq->split.avail_idx_shadow;
+	vq->split.vring.avail->idx = cpu_to_virtio16(_vq->vdev, avail_idx);
+	vq->num_added = 1;
+	END_USE(vq);
+	virtqueue_kick_sync(_vq);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(virtqueue_add_desc);
+
+/**
  * virtqueue_add_sgs - expose buffers to other end
  * @vq: the struct virtqueue we're talking about.
  * @sgs: array of terminated scatterlists.
@@ -1841,6 +1891,32 @@ bool virtqueue_notify(struct virtqueue *_vq)
 	return true;
 }
 EXPORT_SYMBOL_GPL(virtqueue_notify);
+
+/**
+ * virtqueue_kick_sync - update after add_buf and busy wait till update is done
+ * @vq: the struct virtqueue
+ *
+ * After one or more virtqueue_add_* calls, invoke this to kick
+ * the other side. Busy wait till the other side is done with the update.
+ *
+ * Caller must ensure we don't call this with other virtqueue
+ * operations at the same time (except where noted).
+ *
+ * Returns false if kick failed, otherwise true.
+ */
+bool virtqueue_kick_sync(struct virtqueue *vq)
+{
+	u32 len;
+
+	if (likely(virtqueue_kick(vq))) {
+		while (!virtqueue_get_buf(vq, &len) &&
+		       !virtqueue_is_broken(vq))
+			cpu_relax();
+		return true;
+	}
+	return false;
+}
+EXPORT_SYMBOL_GPL(virtqueue_kick_sync);
 
 /**
  * virtqueue_kick - update after add_buf
