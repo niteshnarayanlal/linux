@@ -128,16 +128,14 @@ static struct virtio_device_id id_table[] = {
 static void tell_host_one_page(struct virtio_balloon *vb, struct virtqueue *vq,
 			       u64 gvaddr, int len)
 {
-	u64 gpaddr = virt_to_phys((void *)gvaddr);
-
-	virtqueue_add_desc(vq, gpaddr, len, 0);
 }
 
 void virtballoon_page_hinting(struct virtio_balloon *vb, u64 gvaddr,
 			      int hyper_entries)
 {
-	vb->num_pfns = hyper_entries;
-	tell_host_one_page(vb, vb->hinting_vq, gvaddr, hyper_entries);
+	u64 gpaddr = virt_to_phys((void *)gvaddr);
+
+	virtqueue_add_desc(vb->hinting_vq, gpaddr, hyper_entries, 0);
 }
 
 static void hinting_ack(struct virtqueue *vq)
