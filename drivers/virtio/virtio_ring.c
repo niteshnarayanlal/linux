@@ -1696,65 +1696,10 @@ static inline int virtqueue_add(struct virtqueue *_vq,
 }
 
 /**
- * virtqueue_add_chain - expose a chain of buffers to the other end
- * @_vq: the struct virtqueue we're talking about.
- * @head: desc id of the chain head.
- * @indirect: set if the chain of descs are indrect descs.
- * @indir_desc: the first indirect desc.
- * @data: the token identifying the chain.
- * @ctx: extra context for the token.
- *
- * Caller must ensure we don't call this with other virtqueue operations
- * at the same time (except where noted).
- *
- * Returns zero or a negative error (ie. ENOSPC, ENOMEM, EIO).
- */
-int virtqueue_add_chain(struct virtqueue *_vq,
-			unsigned int head,
-			bool indirect,
-			struct vring_desc *indir_desc,
-			void *data,
-			void *ctx)
-{
-	struct vring_virtqueue *vq = to_vvq(_vq);
-	int avail_idx;
-
-	/* The desc chain is empty. */
-	if (head == VIRTQUEUE_DESC_ID_INIT)
-		return 0;
-
-	START_USE(vq);
-
-	if (unlikely(vq->broken)) {
-		END_USE(vq);
-		return -EIO;
-	}
-
-	/* This is the data for callback, in our case may not be required. */
-	vq->split.desc_state[head].data = data;
-	if (indirect)
-		vq->split.desc_state[head].indir_desc = indir_desc;
-	if (ctx)
-		vq->split.desc_state[head].indir_desc = ctx;
-
-	vq->split.avail_idx_shadow = 1;
-	avail_idx = vq->split.avail_idx_shadow;
-	vq->split.vring.avail->idx = cpu_to_virtio16(_vq->vdev, avail_idx);
-	vq->num_added = 1;
-	END_USE(vq);
-	virtqueue_kick_sync(_vq);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(virtqueue_add_chain);
-
-/**
- * virtqueue_add_chain_desc - add a buffer to a chain using a vring desc
+ * virtqueue_add_desc - add a buffer to a chain using a vring desc
  * @vq: the struct virtqueue we're talking about.
  * @addr: address of the buffer to add.
  * @len: length of the buffer.
- * @head_id: desc id of the chain head.
- * @prev_id: desc id of the previous buffer.
  * @in: set if the buffer is for the device to write.
  *
  * Caller must ensure we don't call this with other virtqueue operations
@@ -1762,24 +1707,19 @@ EXPORT_SYMBOL_GPL(virtqueue_add_chain);
  *
  * Returns zero or a negative error (ie. ENOSPC, ENOMEM, EIO).
  */
-int virtqueue_add_chain_desc(struct virtqueue *_vq,
-			     u64 addr,
-			     u32 len,
-			     unsigned int *head_id,
-			     unsigned int *prev_id,
-			     bool in)
+int virtqueue_add_desc(struct virtqueue *_vq, u64 addr, u32 len, int in)
 {
 	struct vring_virtqueue *vq = to_vvq(_vq);
 	struct vring_desc *desc = vq->split.vring.desc;
 	u16 flags = in ? VRING_DESC_F_WRITE : 0;
 	unsigned int i;
-	unsigned int head;
         void *data = (void *) addr;
 	int avail_idx;
 
 	/* Sanity check */
-	if (!_vq || !head_id || !prev_id)
+	if (!_vq)
 		return -EINVAL;
+
 	START_USE(vq);
 	if (unlikely(vq->broken)) {
 		END_USE(vq);
@@ -1792,15 +1732,9 @@ int virtqueue_add_chain_desc(struct virtqueue *_vq,
 	desc[i].addr = cpu_to_virtio64(_vq->vdev, addr);
 	desc[i].len = cpu_to_virtio32(_vq->vdev, len);
 
-	*head_id = i;
-	
 	vq->vq.num_free--;
 	vq->free_head = virtio16_to_cpu(_vq->vdev, desc[i].next);
-
-	head = *head_id;
-
-	vq->split.desc_state[head].data = data;
-
+	vq->split.desc_state[i].data = data;
 	vq->split.avail_idx_shadow = 1;
 	avail_idx = vq->split.avail_idx_shadow;
 	vq->split.vring.avail->idx = cpu_to_virtio16(_vq->vdev, avail_idx);
@@ -1809,7 +1743,7 @@ int virtqueue_add_chain_desc(struct virtqueue *_vq,
 	virtqueue_kick_sync(_vq);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(virtqueue_add_chain_desc);
+EXPORT_SYMBOL_GPL(virtqueue_add_desc);
 
 /**
  * virtqueue_add_sgs - expose buffers to other end

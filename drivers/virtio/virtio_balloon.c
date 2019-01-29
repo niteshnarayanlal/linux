@@ -128,10 +128,9 @@ static struct virtio_device_id id_table[] = {
 static void tell_host_one_page(struct virtio_balloon *vb, struct virtqueue *vq,
 			       u64 gvaddr, int len)
 {
-	unsigned int id = VIRTQUEUE_DESC_ID_INIT;
 	u64 gpaddr = virt_to_phys((void *)gvaddr);
 
-	virtqueue_add_chain_desc(vq, gpaddr, len, &id, &id, 0);
+	virtqueue_add_desc(vq, gpaddr, len, 0);
 }
 
 void virtballoon_page_hinting(struct virtio_balloon *vb, u64 gvaddr,
