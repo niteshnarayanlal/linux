@@ -1691,6 +1691,15 @@ static struct ctl_table vm_table[] = {
 		.extra2		= (void *)&mmap_rnd_compat_bits_max,
 	},
 #endif
+#ifdef CONFIG_KVM_FREE_PAGE_HINTING
+	{
+		.procname	= "guest-page-hinting",
+		.data		= &guest_page_hinting_flag,
+		.maxlen		= sizeof(guest_page_hinting_flag),
+		.mode		= 0644,
+		.proc_handler   = guest_page_hinting_sysctl,
+	},
+#endif
 	{ }
 };
 

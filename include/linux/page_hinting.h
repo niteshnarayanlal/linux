@@ -14,4 +14,9 @@ struct hypervisor_pages {
 	unsigned int order;
 };
 
+extern int guest_page_hinting_flag;
+extern struct static_key_false guest_page_hinting_key;
+
+int guest_page_hinting_sysctl(struct ctl_table *table, int write,
+			      void __user *buffer, size_t *lenp, loff_t *ppos);
 void guest_free_page(struct page *page, int order);

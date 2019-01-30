@@ -461,6 +461,8 @@ static inline struct zonelist *node_zonelist(int nid, gfp_t flags)
 #define HAVE_ARCH_FREE_PAGE
 static inline void arch_free_page(struct page *page, int order)
 {
+	if (!static_branch_unlikely(&guest_page_hinting_key))
+		return;
 	guest_free_page(page, order);
 }
 #endif
