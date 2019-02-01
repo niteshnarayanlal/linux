@@ -4,6 +4,7 @@
 #include <linux/kvm_host.h>
 #include <linux/sort.h>
 #include <linux/kernel.h>
+#include <trace/events/kmem.h>
 
 /*
  * struct kvm_free_pages - Tracks the pages which are freed by the guest.
@@ -140,7 +141,11 @@ static void hinting_fn(unsigned int cpu)
 					int l_idx = page_hinting_obj->hyp_idx;
 					struct hypervisor_pages *l_obj =
 					page_hinting_obj->hypervisor_pagelist;
+					unsigned int buddy_pages =
+						1 << buddy_order;
 
+					trace_guest_isolated_pfn(pfn,
+								 buddy_pages);
 					l_obj[l_idx].pfn = pfn;
 					l_obj[l_idx].order = buddy_order;
 					page_hinting_obj->hyp_idx += 1;
@@ -163,7 +168,11 @@ static void hinting_fn(unsigned int cpu)
 					page_hinting_obj->hypervisor_pagelist;
 					unsigned long buddy_pfn =
 						page_to_pfn(buddy_page);
+					unsigned int buddy_pages =
+						1 << buddy_order;
 
+					trace_guest_isolated_pfn(pfn,
+								 buddy_pages);
 					l_obj[l_idx].pfn = buddy_pfn;
 					l_obj[l_idx].order = buddy_order;
 					page_hinting_obj->hyp_idx += 1;
@@ -294,6 +303,7 @@ void guest_free_page(struct page *page, int order)
 	local_irq_save(flags);
 	if (page_hinting_obj->kvm_pt_idx != MAX_FGPT_ENTRIES) {
 		disable_page_poisoning();
+		trace_guest_free_page(page, order);
 		page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].pfn =
 							page_to_pfn(page);
 		page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].zonenum =
