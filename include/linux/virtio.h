@@ -57,6 +57,10 @@ int virtqueue_add_sgs(struct virtqueue *vq,
 		      unsigned int in_sgs,
 		      void *data,
 		      gfp_t gfp);
+/* A desc with this init id is treated as an invalid desc */
+int virtqueue_add_desc(struct virtqueue *_vq, u64 addr, u32 len, int in);
+
+bool virtqueue_kick_sync(struct virtqueue *vq);
 
 bool virtqueue_kick(struct virtqueue *vq);
 
