@@ -48,6 +48,7 @@
 #include <asm/tlb.h>
 
 static int kvmapf = 1;
+DEFINE_STATIC_KEY_FALSE(pv_free_page_hint_enabled);
 
 static int __init parse_no_kvmapf(char *arg)
 {
@@ -648,6 +649,15 @@ static void __init kvm_guest_init(void)
 	if (kvm_para_has_feature(KVM_FEATURE_PV_EOI))
 		apic_set_eoi_write(kvm_guest_apic_eoi_write);
 
+	/*
+	 * The free page hinting doesn't add much value if page poisoning
+	 * is enabled. So we only enable the feature if page poisoning is
+	 * no present.
+	 */
+	if (!page_poisoning_enabled() &&
+	    kvm_para_has_feature(KVM_FEATURE_PV_UNUSED_PAGE_HINT))
+		static_branch_enable(&pv_free_page_hint_enabled);
+
 #ifdef CONFIG_SMP
 	smp_ops.smp_prepare_cpus = kvm_smp_prepare_cpus;
 	smp_ops.smp_prepare_boot_cpu = kvm_smp_prepare_boot_cpu;
@@ -761,6 +771,19 @@ static __init int kvm_setup_pv_tlb_flush(void)
 	return 0;
 }
 arch_initcall(kvm_setup_pv_tlb_flush);
+
+void __arch_free_page(struct page *page, unsigned int order)
+{
+	/*
+	 * Limit hints to blocks no smaller than pageblock in
+	 * size to limit the cost for the hypercalls.
+	 */
+	if (order < KVM_PV_UNUSED_PAGE_HINT_MIN_ORDER)
+		return;
+
+	kvm_hypercall2(KVM_HC_UNUSED_PAGE_HINT, page_to_phys(page),
+		       PAGE_SIZE << order);
+}
 
 #ifdef CONFIG_PARAVIRT_SPINLOCKS
 

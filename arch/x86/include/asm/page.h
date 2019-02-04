@@ -18,6 +18,19 @@
 
 struct page;
 
+#ifdef CONFIG_KVM_GUEST
+#include <linux/jump_label.h>
+extern struct static_key_false pv_free_page_hint_enabled;
+
+#define HAVE_ARCH_FREE_PAGE
+void __arch_free_page(struct page *page, unsigned int order);
+static inline void arch_free_page(struct page *page, unsigned int order)
+{
+	if (static_branch_unlikely(&pv_free_page_hint_enabled))
+		__arch_free_page(page, order);
+}
+#endif
+
 #include <linux/range.h>
 extern struct range pfn_mapped[];
 extern int nr_pfn_mapped;
