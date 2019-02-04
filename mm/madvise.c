@@ -799,7 +799,7 @@ madvise_behavior_valid(int behavior)
  *  -EBADF  - map exists, but area maps something that isn't a file.
  *  -EAGAIN - a kernel resource was temporarily unavailable.
  */
-SYSCALL_DEFINE3(madvise, unsigned long, start, size_t, len_in, int, behavior)
+static int do_madvise(unsigned long start, size_t len_in, int behavior)
 {
 	unsigned long end, tmp;
 	struct vm_area_struct *vma, *prev;
@@ -894,3 +894,14 @@ out:
 
 	return error;
 }
+
+SYSCALL_DEFINE3(madvise, unsigned long, start, size_t, len_in, int, behavior)
+{
+	return do_madvise(start, len_in, behavior);
+}
+
+int do_madvise_dontneed(unsigned long start, size_t len_in)
+{
+	return do_madvise(start, len_in, MADV_DONTNEED);
+}
+EXPORT_SYMBOL_GPL(do_madvise_dontneed);
