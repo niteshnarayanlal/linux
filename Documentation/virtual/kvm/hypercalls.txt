@@ -141,3 +141,17 @@ a0 corresponds to the APIC ID in the third argument (a2), bit 1
 corresponds to the APIC ID a2+1, and so on.
 
 Returns the number of CPUs to which the IPIs were delivered successfully.
+
+7. KVM_HC_UNUSED_PAGE_HINT
+------------------------
+Architecture: x86
+Status: active
+Purpose: Send unused page hint to host
+
+a0: physical address of region unused, page aligned
+a1: size of unused region, page aligned
+
+The hypercall lets a guest send notifications to the host that it will no
+longer be using a given page in memory. Multiple pages can be hinted at by
+using the size field to hint that a higher order page is available by
+specifying the higher order page size.

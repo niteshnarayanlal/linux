@@ -55,6 +55,7 @@
 #include <linux/irqbypass.h>
 #include <linux/sched/stat.h>
 #include <linux/mem_encrypt.h>
+#include <linux/mm.h>
 
 #include <trace/events/kvm.h>
 
@@ -7059,6 +7060,37 @@ void kvm_vcpu_deactivate_apicv(struct kvm_vcpu *vcpu)
 	kvm_x86_ops->refresh_apicv_exec_ctrl(vcpu);
 }
 
+static int kvm_pv_unused_page_hint_op(struct kvm *kvm, gpa_t gpa, size_t len)
+{
+	unsigned long start;
+
+	/*
+	 * Guarantee the following:
+	 *	len meets minimum size
+	 *	len is a power of 2
+	 *	gpa is aligned to len
+	 */
+	if (len < (PAGE_SIZE << KVM_PV_UNUSED_PAGE_HINT_MIN_ORDER))
+		return -KVM_EINVAL;
+	if (!is_power_of_2(len) || !IS_ALIGNED(gpa, len))
+		return -KVM_EINVAL;
+
+	/*
+	 * If a device is assigned we cannot use use madvise as memory
+	 * is shared with the device and could lead to memory corruption
+	 * if the device writes to it after free.
+	 */
+	if (kvm_arch_has_assigned_device(kvm))
+		return -KVM_EOPNOTSUPP;
+
+	start = gfn_to_hva(kvm, gpa_to_gfn(gpa));
+
+	if (kvm_is_error_hva(start + len))
+		return -KVM_EFAULT;
+
+	return do_madvise_dontneed(start, len);
+}
+
 int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 {
 	unsigned long nr, a0, a1, a2, a3, ret;
@@ -7104,6 +7136,9 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 #endif
 	case KVM_HC_SEND_IPI:
 		ret = kvm_pv_send_ipi(vcpu->kvm, a0, a1, a2, a3, op_64_bit);
+		break;
+	case KVM_HC_UNUSED_PAGE_HINT:
+		ret = kvm_pv_unused_page_hint_op(vcpu->kvm, a0, a1);
 		break;
 	default:
 		ret = -KVM_ENOSYS;
