@@ -916,6 +916,8 @@ continue_merging:
 		page = page + (combined_pfn - pfn);
 		pfn = combined_pfn;
 		order++;
+
+		arch_merge_page(zone, page, order);
 	}
 	if (max_order < MAX_ORDER) {
 		/* If we are here, it means order is >= pageblock_order.

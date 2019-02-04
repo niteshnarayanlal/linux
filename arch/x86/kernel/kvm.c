@@ -785,6 +785,34 @@ void __arch_free_page(struct page *page, unsigned int order)
 		       PAGE_SIZE << order);
 }
 
+void __arch_merge_page(struct zone *zone, struct page *page,
+		       unsigned int order)
+{
+	/*
+	 * The merging logic has merged a set of buddies up to the
+	 * KVM_PV_UNUSED_PAGE_HINT_MIN_ORDER. Since that is the case, take
+	 * advantage of this moment to notify the hypervisor of the free
+	 * memory.
+	 */
+	if (order != KVM_PV_UNUSED_PAGE_HINT_MIN_ORDER)
+		return;
+
+	/*
+	 * Drop zone lock while processing the hypercall. This
+	 * should be safe as the page has not yet been added
+	 * to the buddy list as of yet and all the pages that
+	 * were merged have had their buddy/guard flags cleared
+	 * and their order reset to 0.
+	 */
+	spin_unlock(&zone->lock);
+
+	kvm_hypercall2(KVM_HC_UNUSED_PAGE_HINT, page_to_phys(page),
+		       PAGE_SIZE << order);
+
+	/* reacquire lock and resume freeing memory */
+	spin_lock(&zone->lock);
+}
+
 #ifdef CONFIG_PARAVIRT_SPINLOCKS
 
 /* Kick a cpu by its apicid. Used to wake up a halted vcpu */

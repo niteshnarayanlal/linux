@@ -29,6 +29,18 @@ static inline void arch_free_page(struct page *page, unsigned int order)
 	if (static_branch_unlikely(&pv_free_page_hint_enabled))
 		__arch_free_page(page, order);
 }
+
+struct zone;
+
+#define HAVE_ARCH_MERGE_PAGE
+void __arch_merge_page(struct zone *zone, struct page *page,
+		       unsigned int order);
+static inline void arch_merge_page(struct zone *zone, struct page *page,
+				   unsigned int order)
+{
+	if (static_branch_unlikely(&pv_free_page_hint_enabled))
+		__arch_merge_page(zone, page, order);
+}
 #endif
 
 #include <linux/range.h>
