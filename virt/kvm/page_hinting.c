@@ -174,7 +174,7 @@ static void hinting_fn(unsigned int cpu)
 				continue;
 			}
 
-			if (PageBuddy(page)) {
+			if (PageBuddy(page) && page_private(page) >= (MAX_ORDER - 1)) {
 				int buddy_order = page_private(page);
 
 				ret = __isolate_free_page(page, buddy_order);
@@ -205,7 +205,7 @@ static void hinting_fn(unsigned int cpu)
 			}
 
 			buddy_page = get_buddy_page(page);
-			if (buddy_page) {
+			if (buddy_page && page_private(buddy_page) >= (MAX_ORDER - 1)) {
 				int buddy_order = page_private(buddy_page);
 
 				ret = __isolate_free_page(buddy_page,
@@ -270,64 +270,6 @@ int if_exist(struct page *page)
 	return 0;
 }
 
-void pack_array(void)
-{
-	int i = 0, j = 0;
-	struct page_hinting *page_hinting_obj = this_cpu_ptr(&hinting_obj);
-
-	while (i < MAX_FGPT_ENTRIES) {
-		if (page_hinting_obj->kvm_pt[i].pfn != 0) {
-			if (i != j) {
-				page_hinting_obj->kvm_pt[j].pfn =
-					page_hinting_obj->kvm_pt[i].pfn;
-				page_hinting_obj->kvm_pt[j].order =
-					page_hinting_obj->kvm_pt[i].order;
-				page_hinting_obj->kvm_pt[j].zonenum =
-					page_hinting_obj->kvm_pt[i].zonenum;
-			}
-			j++;
-		}
-		i++;
-	}
-	i = j;
-	page_hinting_obj->kvm_pt_idx = j;
-	while (j < MAX_FGPT_ENTRIES) {
-		page_hinting_obj->kvm_pt[j].pfn = 0;
-		page_hinting_obj->kvm_pt[j].order = -1;
-		page_hinting_obj->kvm_pt[j].zonenum = -1;
-		j++;
-	}
-}
-
-void scan_array(void)
-{
-	struct page_hinting *page_hinting_obj = this_cpu_ptr(&hinting_obj);
-	int i = 0;
-
-	while (i < MAX_FGPT_ENTRIES) {
-		struct page *page =
-			pfn_to_page(page_hinting_obj->kvm_pt[i].pfn);
-		struct page *buddy_page = get_buddy_page(page);
-
-		if (!PageBuddy(page) && buddy_page) {
-			if (if_exist(buddy_page)) {
-				page_hinting_obj->kvm_pt[i].pfn = 0;
-				page_hinting_obj->kvm_pt[i].order = -1;
-				page_hinting_obj->kvm_pt[i].zonenum = -1;
-			} else {
-				page_hinting_obj->kvm_pt[i].pfn =
-					page_to_pfn(buddy_page);
-				page_hinting_obj->kvm_pt[i].order =
-					page_private(buddy_page);
-			}
-		}
-		i++;
-	}
-	pack_array();
-	if (page_hinting_obj->kvm_pt_idx == MAX_FGPT_ENTRIES)
-		wake_up_process(__this_cpu_read(hinting_task));
-}
-
 static int hinting_should_run(unsigned int cpu)
 {
 	struct page_hinting *page_hinting_obj = this_cpu_ptr(&hinting_obj);
@@ -353,6 +295,7 @@ void guest_free_page(struct page *page, int order)
 	unsigned long flags;
 	struct page_hinting *page_hinting_obj = this_cpu_ptr(&hinting_obj);
 	int err = 0;
+	struct page *buddy_page = get_buddy_page(page);
 	/*
 	 * use of global variables may trigger a race condition between irq and
 	 * process context causing unwanted overwrites. This will be replaced
@@ -371,15 +314,26 @@ void guest_free_page(struct page *page, int order)
 	if (page_hinting_obj->kvm_pt_idx != MAX_FGPT_ENTRIES) {
 		disable_page_poisoning();
 		trace_guest_free_page(page, order);
-		page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].pfn =
-							page_to_pfn(page);
-		page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].zonenum =
-							page_zonenum(page);
-		page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].order =
-							order;
-		page_hinting_obj->kvm_pt_idx += 1;
-		captured += (((1 << order) * 4));
-
+		if (PageBuddy(page) && page_private(page) >= (MAX_ORDER - 1)) {
+			page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].pfn =
+								page_to_pfn(page);
+			page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].zonenum =
+								page_zonenum(page);
+			page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].order =
+								order;
+			page_hinting_obj->kvm_pt_idx += 1;
+			captured += (((1 << order) * 4));
+		}
+		if (buddy_page && page_private(buddy_page) >= (MAX_ORDER - 1) && !if_exist(buddy_page)) {
+			page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].pfn =
+								page_to_pfn(page);
+			page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].zonenum =
+								page_zonenum(page);
+			page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].order =
+								order;
+			page_hinting_obj->kvm_pt_idx += 1;
+			captured += (((1 << order) * 4));
+		}
 		if (page_hinting_obj->kvm_pt_idx == MAX_FGPT_ENTRIES) {
 			/*
 			 * We are depending on the buddy free-list to identify
@@ -389,8 +343,7 @@ void guest_free_page(struct page *page, int order)
 			 * captured pages and hence more memory reporting to the
 			 * host.
 			 */
-			drain_local_pages(NULL);
-			scan_array();
+			wake_up_process(__this_cpu_read(hinting_task));
 		}
 	}
 	local_irq_restore(flags);
