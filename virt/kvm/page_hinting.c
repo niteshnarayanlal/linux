@@ -185,11 +185,9 @@ static void hinting_fn(unsigned int cpu)
 					int l_idx = page_hinting_obj->hyp_idx;
 					struct hypervisor_pages *l_obj =
 					page_hinting_obj->hypervisor_pagelist;
-					unsigned int buddy_pages =
-						1 << buddy_order;
 
-					trace_guest_isolated_pfn(pfn,
-								 buddy_pages);
+					trace_guest_isolated_page(pfn,
+								 buddy_order);
 					l_obj[l_idx].pfn = pfn;
 					l_obj[l_idx].order = buddy_order;
 					total_isolated +=
@@ -219,11 +217,9 @@ static void hinting_fn(unsigned int cpu)
 					page_hinting_obj->hypervisor_pagelist;
 					unsigned long buddy_pfn =
 						page_to_pfn(buddy_page);
-					unsigned int buddy_pages =
-						1 << buddy_order;
 
-					trace_guest_isolated_pfn(pfn,
-								 buddy_pages);
+					trace_guest_isolated_page(pfn,
+								 buddy_order);
 					l_obj[l_idx].pfn = buddy_pfn;
 					l_obj[l_idx].order = buddy_order;
 					total_isolated +=
@@ -310,10 +306,10 @@ void guest_free_page(struct page *page, int order)
 		sys_init_cnt = 1;
 	}
 
+	trace_guest_free_page(page_to_pfn(page), order);
 	total_freed += (((1 << order) * 4));
 	if (page_hinting_obj->kvm_pt_idx != MAX_FGPT_ENTRIES) {
 		disable_page_poisoning();
-		trace_guest_free_page(page, order);
 		if (PageBuddy(page) && page_private(page) >= (MAX_ORDER - 1)) {
 			page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].pfn =
 								page_to_pfn(page);
@@ -321,16 +317,18 @@ void guest_free_page(struct page *page, int order)
 								page_zonenum(page);
 			page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].order =
 								order;
+			trace_guest_captured_page(page_to_pfn(page), order, page_hinting_obj->kvm_pt_idx);
 			page_hinting_obj->kvm_pt_idx += 1;
 			captured += (((1 << order) * 4));
 		}
 		if (buddy_page && page_private(buddy_page) >= (MAX_ORDER - 1) && !if_exist(buddy_page)) {
 			page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].pfn =
-								page_to_pfn(page);
+								page_to_pfn(buddy_page);
 			page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].zonenum =
-								page_zonenum(page);
+								page_zonenum(buddy_page);
 			page_hinting_obj->kvm_pt[page_hinting_obj->kvm_pt_idx].order =
-								order;
+								page_private(buddy_page);
+			trace_guest_captured_page(page_to_pfn(buddy_page), page_private(buddy_page), page_hinting_obj->kvm_pt_idx);
 			page_hinting_obj->kvm_pt_idx += 1;
 			captured += (((1 << order) * 4));
 		}

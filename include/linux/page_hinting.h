@@ -1,6 +1,6 @@
 #include <linux/smpboot.h>
 
-#define MAX_FGPT_ENTRIES	500
+#define MAX_FGPT_ENTRIES	800
 /*
  * hypervisor_pages - It is a dummy structure passed with the hypercall.
  * @pfn - page frame number for the page which is to be freed.
