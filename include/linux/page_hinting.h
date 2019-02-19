@@ -1,6 +1,4 @@
-#include <linux/smpboot.h>
-
-#define MAX_FGPT_ENTRIES	800
+#define MAX_FGPT_ENTRIES	256
 /*
  * hypervisor_pages - It is a dummy structure passed with the hypercall.
  * @pfn - page frame number for the page which is to be freed.
@@ -15,7 +13,6 @@ struct hypervisor_pages {
 
 extern int guest_page_hinting_flag;
 extern struct static_key_false guest_page_hinting_key;
-extern struct smp_hotplug_thread hinting_threads;
 extern void (*request_hypercall)(void *, u64, int);
 extern void *balloon_ptr;
 extern bool want_page_poisoning;

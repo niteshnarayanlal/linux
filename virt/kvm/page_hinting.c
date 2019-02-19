@@ -40,7 +40,6 @@ EXPORT_SYMBOL(guest_page_hinting_key);
 static DEFINE_MUTEX(hinting_mutex);
 int guest_page_hinting_flag;
 EXPORT_SYMBOL(guest_page_hinting_flag);
-static DEFINE_PER_CPU(struct task_struct *, hinting_task);
 
 void (*request_hypercall)(void *, u64, int);
 EXPORT_SYMBOL(request_hypercall);
@@ -134,7 +133,7 @@ struct page *get_buddy_page(struct page *page)
 	return NULL;
 }
 
-static void hinting_fn(unsigned int cpu)
+static void arch_free_page_slowpath(void)
 {
 	struct page_hinting *page_hinting_obj = this_cpu_ptr(&hinting_obj);
 	int idx = 0, ret = 0;
@@ -266,26 +265,6 @@ int if_exist(struct page *page)
 	return 0;
 }
 
-static int hinting_should_run(unsigned int cpu)
-{
-	struct page_hinting *page_hinting_obj = this_cpu_ptr(&hinting_obj);
-	int free_page_idx = page_hinting_obj->kvm_pt_idx;
-
-	if (free_page_idx == MAX_FGPT_ENTRIES)
-		return 1;
-	else
-		return 0;
-}
-
-struct smp_hotplug_thread hinting_threads = {
-	.store			= &hinting_task,
-	.thread_should_run	= hinting_should_run,
-	.thread_fn		= hinting_fn,
-	.thread_comm		= "hinting/%u",
-	.selfparking		= false,
-};
-EXPORT_SYMBOL(hinting_threads);
-
 void guest_free_page(struct page *page, int order)
 {
 	unsigned long flags;
@@ -341,7 +320,7 @@ void guest_free_page(struct page *page, int order)
 			 * captured pages and hence more memory reporting to the
 			 * host.
 			 */
-			wake_up_process(__this_cpu_read(hinting_task));
+			arch_free_page_slowpath();
 		}
 	}
 	local_irq_restore(flags);

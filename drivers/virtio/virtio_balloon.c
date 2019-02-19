@@ -147,7 +147,6 @@ static void enable_hinting(struct virtio_balloon *vb)
 	static_branch_enable(&guest_page_hinting_key);
 	request_hypercall = (void *)&virtballoon_page_hinting;
 	balloon_ptr = vb;
-	WARN_ON(smpboot_register_percpu_thread(&hinting_threads));
 }
 
 static void disable_hinting(void)
