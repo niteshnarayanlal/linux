@@ -813,7 +813,7 @@ static inline int page_is_buddy(struct page *page, struct page *buddy,
  * -- nyc
  */
 
-static inline void __free_one_page(struct page *page,
+inline void __free_one_page(struct page *page,
 		unsigned long pfn,
 		struct zone *zone, unsigned int order,
 		int migratetype)
@@ -1194,8 +1194,10 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			mt = get_pageblock_migratetype(page);
 
 		__free_one_page(page, page_to_pfn(page), zone, 0, mt);
+		spin_unlock(&zone->lock);
 		arch_free_page(page, 0);
 		trace_mm_page_pcpu_drain(page, 0, mt);
+		spin_lock(&zone->lock);
 	}
 	spin_unlock(&zone->lock);
 }

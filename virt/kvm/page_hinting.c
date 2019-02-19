@@ -23,16 +23,12 @@ struct kvm_free_pages {
  * guest free pages, along with an index variable for each of them.
  * @kvm_pt: array object for the structure kvm_free_pages.
  * @kvm_pt_idx: index for kvm_free_pages object.
- * @hypervisor_pagelist: array object for the structure hypervisor_pages.
  * @hyp_idx: index for hypervisor_pages object.
  */
 struct page_hinting {
 	struct kvm_free_pages kvm_pt[MAX_FGPT_ENTRIES];
 	int kvm_pt_idx;
-	struct hypervisor_pages hypervisor_pagelist[MAX_FGPT_ENTRIES];
-	int hyp_idx;
 };
-
 DEFINE_PER_CPU(struct page_hinting, hinting_obj);
 
 struct static_key_false guest_page_hinting_key  = STATIC_KEY_FALSE_INIT;
@@ -113,10 +109,11 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 		mem = (1 << guest_isolated_pages[i].order) * 4;
 		guest_returned += mem;
 		mt = get_pageblock_migratetype(page);
-		free_one_page(page_zone(page), page, page_to_pfn(page),
+		__free_one_page(page, page_to_pfn(page), page_zone(page),
 			      guest_isolated_pages[i].order, mt);
 		i++;
 	}
+	kfree(guest_isolated_pages);
 }
 
 struct page *get_buddy_page(struct page *page)
@@ -136,9 +133,19 @@ struct page *get_buddy_page(struct page *page)
 static void arch_free_page_slowpath(void)
 {
 	struct page_hinting *page_hinting_obj = this_cpu_ptr(&hinting_obj);
+	struct hypervisor_pages *free_pagelist;
 	int idx = 0, ret = 0;
 	struct zone *zone_cur;
 	unsigned long flags = 0;
+	int hyp_idx = 0;
+
+	free_pagelist = kmalloc(1000 * sizeof(struct hypervisor_pages), GFP_KERNEL);
+	if (!free_pagelist) {
+		page_hinting_obj->kvm_pt_idx = 0;
+		put_cpu_var(hinting_obj);
+		return;
+		/* return some logical error here*/
+	}
 
 	while (idx < MAX_FGPT_ENTRIES) {
 		unsigned long pfn = page_hinting_obj->kvm_pt[idx].pfn;
@@ -181,19 +188,15 @@ static void arch_free_page_slowpath(void)
 					failed_isolation +=
 						((1 << buddy_order) * 4);
 				} else {
-					int l_idx = page_hinting_obj->hyp_idx;
-					struct hypervisor_pages *l_obj =
-					page_hinting_obj->hypervisor_pagelist;
-
 					trace_guest_isolated_page(pfn,
 								 buddy_order);
-					l_obj[l_idx].pfn = pfn;
-					l_obj[l_idx].order = buddy_order;
+					free_pagelist[hyp_idx].pfn = pfn;
+					free_pagelist[hyp_idx].order = buddy_order;
 					total_isolated +=
 						(((1 << buddy_order) * 4));
 					tail_isolated +=
 						(((1 << buddy_order) * 4));
-					page_hinting_obj->hyp_idx += 1;
+					hyp_idx += 1;
 				}
 				pfn = pfn + (1 << buddy_order);
 				scanned += ((1 << buddy_order) * 4);
@@ -211,21 +214,18 @@ static void arch_free_page_slowpath(void)
 					failed_isolation +=
 						((1 << buddy_order) * 4);
 				} else {
-					int l_idx = page_hinting_obj->hyp_idx;
-					struct hypervisor_pages *l_obj =
-					page_hinting_obj->hypervisor_pagelist;
 					unsigned long buddy_pfn =
 						page_to_pfn(buddy_page);
-
+	
 					trace_guest_isolated_page(pfn,
 								 buddy_order);
-					l_obj[l_idx].pfn = buddy_pfn;
-					l_obj[l_idx].order = buddy_order;
+					free_pagelist[hyp_idx].pfn = buddy_pfn;
+					free_pagelist[hyp_idx].order = buddy_order;
 					total_isolated +=
 						(((1 << buddy_order) * 4));
 					tail_isolated +=
 						(((1 << buddy_order) * 4));
-					page_hinting_obj->hyp_idx += 1;
+					hyp_idx += 1;
 				}
 				pfn = page_to_pfn(buddy_page) +
 					(1 << buddy_order);
@@ -243,13 +243,15 @@ static void arch_free_page_slowpath(void)
 		page_hinting_obj->kvm_pt[idx].zonenum = -1;
 		idx++;
 	}
-	if (page_hinting_obj->hyp_idx > 0) {
-		hyperlist_ready(page_hinting_obj->hypervisor_pagelist,
-				page_hinting_obj->hyp_idx);
-		page_hinting_obj->hyp_idx = 0;
-	}
+
 	page_hinting_obj->kvm_pt_idx = 0;
 	put_cpu_var(hinting_obj);
+
+	if (hyp_idx > 0)
+		hyperlist_ready(free_pagelist, hyp_idx);
+	else 
+		kfree(free_pagelist);
+		/* return some logical error here*/
 }
 
 int if_exist(struct page *page)
