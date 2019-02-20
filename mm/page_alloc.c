@@ -1072,7 +1072,7 @@ static __always_inline bool free_pages_prepare(struct page *page,
 		debug_check_no_obj_freed(page_address(page),
 					   PAGE_SIZE << order);
 	}
-//	arch_free_page(page, order);
+	arch_free_page(page, order);
 	kernel_poison_pages(page, 1 << order, 0);
 	kernel_map_pages(page, 1 << order, 0);
 	kasan_free_nondeferred_pages(page, order);
@@ -1194,7 +1194,7 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			mt = get_pageblock_migratetype(page);
 
 		__free_one_page(page, page_to_pfn(page), zone, 0, mt);
-		arch_free_page(page, 0);
+		guest_free_page(page, 0);
 		trace_mm_page_pcpu_drain(page, 0, mt);
 	}
 	spin_unlock(&zone->lock);
@@ -1212,7 +1212,7 @@ void free_one_page(struct zone *zone,
 	}
 	__free_one_page(page, pfn, zone, order, migratetype);
 	spin_unlock(&zone->lock);
-	arch_free_page(page, order);
+	guest_free_page(page, order);
 }
 
 static void __meminit __init_single_page(struct page *page, unsigned long pfn,

@@ -19,7 +19,7 @@ extern bool want_page_poisoning;
 
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp, loff_t *ppos);
-void guest_free_page(struct page *page, int order);
+void guest_hinting_fn(struct page *page, int order);
 extern int __isolate_free_page(struct page *page, unsigned int order);
 extern void __free_one_page(struct page *page, unsigned long pfn, struct zone* zone,
 			  unsigned int order,

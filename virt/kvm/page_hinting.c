@@ -139,7 +139,7 @@ static void arch_free_page_slowpath(void)
 	unsigned long flags = 0;
 	int hyp_idx = 0;
 
-	free_pagelist = kmalloc(256 * sizeof(struct hypervisor_pages), GFP_KERNEL);
+	free_pagelist = kmalloc(MAX_FGPT_ENTRIES * sizeof(struct hypervisor_pages), GFP_KERNEL);
 	if (!free_pagelist) {
 		page_hinting_obj->kvm_pt_idx = 0;
 		put_cpu_var(hinting_obj);
@@ -267,7 +267,7 @@ int if_exist(struct page *page)
 	return 0;
 }
 
-void guest_free_page(struct page *page, int order)
+void guest_hinting_fn(struct page *page, int order)
 {
 	unsigned long flags;
 	struct page_hinting *page_hinting_obj = this_cpu_ptr(&hinting_obj);
