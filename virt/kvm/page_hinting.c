@@ -314,15 +314,16 @@ void guest_free_page(struct page *page, int order)
 			captured += (((1 << order) * 4));
 		}
 		if (page_hinting_obj->kvm_pt_idx == MAX_FGPT_ENTRIES) {
-			/*
-			 * We are depending on the buddy free-list to identify
-			 * if a page is free or not. Hence, we are dumping all
-			 * the per-cpu pages back into the buddy allocator. This
-			 * will ensure less failures when we try to isolate free
-			 * captured pages and hence more memory reporting to the
-			 * host.
-			 */
+			struct zone *zone = page_zone(page);
+			int was_unlocked = 0;
+
+			if (spin_is_locked(&zone->lock)) {
+				spin_unlock(&zone->lock);
+				was_unlocked = 1;
+			}
 			arch_free_page_slowpath();
+			if (was_unlocked)
+				spin_lock(&zone->lock);
 		}
 	}
 	local_irq_restore(flags);
