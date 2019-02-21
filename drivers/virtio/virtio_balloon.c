@@ -125,13 +125,25 @@ static struct virtio_device_id id_table[] = {
 };
 
 #ifdef CONFIG_KVM_FREE_PAGE_HINTING
-void virtballoon_page_hinting(struct virtio_balloon *vb, u64 gvaddr,
+void virtballoon_page_hinting(struct virtio_balloon *vb, struct guest_request *guest_req,
 			      int hyper_entries)
 {
-	u64 gpaddr = virt_to_phys((void *)gvaddr);
+	struct scatterlist sg;
+	unsigned int len;
+	struct virtqueue *vq = vb->hinting_vq;
+	int unused;
 
-	printk("\nguest physical addr:%llu\n", gpaddr);
-	virtqueue_add_desc(vb->hinting_vq, gpaddr, sizeof(u64), 0);
+        /* Detach all the used buffers from the vq */
+	while (virtqueue_get_buf(vq, &unused))
+                ;
+
+
+	sg_init_one(&sg, guest_req, sizeof(struct guest_request));
+
+	/* We should always be able to add one buffer to an empty queue. */
+	virtqueue_add_outbuf(vq, &sg, 1, guest_req, GFP_KERNEL);
+
+	//virtqueue_add_desc(vb->hinting_vq, gpaddr, sizeof(u64), 0);
 	virtqueue_kick_sync(vb->hinting_vq);
 }
 

@@ -37,7 +37,7 @@ static DEFINE_MUTEX(hinting_mutex);
 int guest_page_hinting_flag;
 EXPORT_SYMBOL(guest_page_hinting_flag);
 
-void (*request_hypercall)(void *, u64, int);
+void (*request_hypercall)(void *, struct guest_request *);
 EXPORT_SYMBOL(request_hypercall);
 void *balloon_ptr;
 EXPORT_SYMBOL(balloon_ptr);
@@ -93,11 +93,6 @@ int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 	return ret;
 }
 
-struct guest_request {
-	u64 addr;
-	int entries;
-};
-
 void release_buddy_pages(struct hypervisor_pages *guest_isolated_pages, int entries)
 {
 	int i = 0;
@@ -129,8 +124,7 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 
 	printk("\nguest_request addr:%llu isolate_page array addr:%llu len:%d\n", (u64)&guest_req[0], guest_req->addr, guest_req->entries);
 	if (balloon_ptr)
-		request_hypercall(balloon_ptr, (u64)&guest_req[0],
-				  entries);
+		request_hypercall(balloon_ptr, guest_req);
 
 	kfree(guest_req);
 	release_buddy_pages(guest_isolated_pages, entries);

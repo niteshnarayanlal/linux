@@ -11,9 +11,14 @@ struct hypervisor_pages {
 	unsigned int order;
 };
 
+struct guest_request {
+        u64 addr;
+        int entries;
+};
+
 extern int guest_page_hinting_flag;
 extern struct static_key_false guest_page_hinting_key;
-extern void (*request_hypercall)(void *, u64, int);
+extern void (*request_hypercall)(void *, struct guest_request *);
 extern void *balloon_ptr;
 extern bool want_page_poisoning;
 
