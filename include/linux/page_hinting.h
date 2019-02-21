@@ -22,6 +22,7 @@ extern void (*request_hypercall)(void *, struct guest_request *);
 extern void *balloon_ptr;
 extern bool want_page_poisoning;
 
+void release_buddy_pages(struct guest_request *);
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp, loff_t *ppos);
 void guest_hinting_fn(struct page *page, int order);

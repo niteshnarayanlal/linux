@@ -93,12 +93,16 @@ int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 	return ret;
 }
 
-void release_buddy_pages(struct hypervisor_pages *guest_isolated_pages, int entries)
+void release_buddy_pages(struct guest_request *guest_req)
 {
 	int i = 0;
 	int mt = 0;
 	unsigned long mem = 0;
+	void *temp_addr = (void *) guest_req->addr;
+	struct hypervisor_pages *guest_isolated_pages = phys_to_virt(temp_addr);
+	int entries = guest_req->entries;
 
+	printk("\nRECOVERED: guest_request addr:%llu isolated_page array addr:%llu len:%d\n",(u64)&guest_req[0], guest_req->addr, guest_req->entries);
 	while (i < entries) {
 		struct page *page = pfn_to_page(guest_isolated_pages[i].pfn);
 
@@ -110,6 +114,7 @@ void release_buddy_pages(struct hypervisor_pages *guest_isolated_pages, int entr
 		i++;
 	}
 	kfree(guest_isolated_pages);
+	kfree(guest_req);
 }
 
 void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
@@ -126,8 +131,6 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 	if (balloon_ptr)
 		request_hypercall(balloon_ptr, guest_req);
 
-	kfree(guest_req);
-	release_buddy_pages(guest_isolated_pages, entries);
 }
 
 struct page *get_buddy_page(struct page *page)
