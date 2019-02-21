@@ -129,15 +129,18 @@ void virtballoon_page_hinting(struct virtio_balloon *vb, struct guest_request *g
 			      int hyper_entries)
 {
 	struct scatterlist sg;
-	unsigned int len;
 	struct virtqueue *vq = vb->hinting_vq;
+	int err;
 
 	printk("\nAddr sent:%llu\n", (u64)guest_req);
 	sg_init_one(&sg, guest_req, sizeof(struct guest_request));
 
 	/* We should always be able to add one buffer to an empty queue. */
 	virtqueue_add_outbuf(vq, &sg, 1, guest_req, GFP_KERNEL);
-	virtqueue_kick(vb->hinting_vq);
+	printk("\nKicking host now....\n");
+	err = virtqueue_kick(vb->hinting_vq);
+	if (!err)
+		printk("\n%d:%s Kick Failed with err:%d\n", __LINE__, __func__, err);
 }
 
 static void hinting_ack(struct virtqueue *vq)
