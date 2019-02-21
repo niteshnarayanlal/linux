@@ -130,7 +130,8 @@ void virtballoon_page_hinting(struct virtio_balloon *vb, u64 gvaddr,
 {
 	u64 gpaddr = virt_to_phys((void *)gvaddr);
 
-	virtqueue_add_desc(vb->hinting_vq, gpaddr, hyper_entries, 0);
+	printk("\nguest physical addr:%llu\n", gpaddr);
+	virtqueue_add_desc(vb->hinting_vq, gpaddr, sizeof(u64), 0);
 	virtqueue_kick_sync(vb->hinting_vq);
 }
 
