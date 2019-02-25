@@ -136,26 +136,21 @@ void virtballoon_page_hinting(struct virtio_balloon *vb, struct guest_request *g
 	while (virtqueue_get_buf(vq, &unused))
 		;
 
-	printk("\nAddr sent:%llu\n", (u64)guest_req);
 	sg_init_one(&sg, guest_req, sizeof(struct guest_request));
 
 	/* We should always be able to add one buffer to an empty queue. */
 	virtqueue_add_outbuf(vq, &sg, 1, guest_req, GFP_KERNEL);
-	printk("\nKicking host now....\n");
 	err = virtqueue_kick(vb->hinting_vq);
-	printk("\nKicked ret:%d\n", ret);
 	if (!err)
 		printk("\n%d:%s Kick Failed with err:%d\n", __LINE__, __func__, err);
 }
 
 static void hinting_ack(struct virtqueue *vq)
 {
-	struct virtio_balloon *vb = vq->vdev->priv;
 	int len = sizeof(u64);
 	u64 addr = (u64) virtqueue_get_buf(vq, &len);
 	void *v_addr = (void *) addr;
 
-	printk("\nTrying to recover from ack: addr:%llu\n", addr);
 	release_buddy_pages(v_addr);
 }
 

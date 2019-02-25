@@ -102,7 +102,6 @@ void release_buddy_pages(struct guest_request *guest_req)
 	struct hypervisor_pages *guest_isolated_pages = temp_addr;
 	int entries = guest_req->entries;
 
-	printk("\nRECOVERED: guest_request addr:%llu isolated_page array addr:%llu len:%d\n",(u64)&guest_req[0], guest_req->addr, guest_req->entries);
 	while (i < entries) {
 		struct page *page = pfn_to_page(guest_isolated_pages[i].pfn);
 
@@ -127,7 +126,6 @@ void hyperlist_ready(struct hypervisor_pages *guest_isolated_pages, int entries)
 	guest_req->addr = virt_to_phys((void *)&guest_isolated_pages[0]);
 	guest_req->entries = entries;
 
-	printk("\nguest_request addr:%llu isolate_page array addr:%llu len:%d\n", (u64)&guest_req[0], guest_req->addr, guest_req->entries);
 	if (balloon_ptr)
 		request_hypercall(balloon_ptr, guest_req);
 }
