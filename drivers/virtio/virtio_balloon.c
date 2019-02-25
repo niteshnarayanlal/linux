@@ -143,15 +143,7 @@ void virtballoon_page_hinting(struct virtio_balloon *vb, struct guest_request *g
 	virtqueue_add_outbuf(vq, &sg, 1, guest_req, GFP_KERNEL);
 	printk("\nKicking host now....\n");
 	err = virtqueue_kick(vb->hinting_vq);
-
-#if 0
-	u64 gvaddr = (u64) &guest_req[0];
-	u64 gpaddr = virt_to_phys((void *)gvaddr);
-
-	virtqueue_add_desc(vb->hinting_vq, gpaddr, hyper_entries, 0);
-	err = virtqueue_kick_sync(vb->hinting_vq);
-
-#endif
+	printk("\nKicked ret:%d\n", ret);
 	if (!err)
 		printk("\n%d:%s Kick Failed with err:%d\n", __LINE__, __func__, err);
 }
