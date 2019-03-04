@@ -9,8 +9,13 @@
  */
 #define HINTING_THRESHOLD	128
 #define FREE_PAGE_HINTING_MIN_ORDER	(MAX_ORDER - 1)
+
+extern void *balloon_ptr;
+
 extern int __isolate_free_page(struct page *page, unsigned int order);
 extern void __free_one_page(struct page *page, unsigned long pfn,
 			    struct zone *zone, unsigned int order,
 			    int migratetype);
-void release_buddy_pages(void *obj_to_free, int entries);
+void release_buddy_pages(void *guest_req, int entries);
+extern void (*request_hypercall)(void *balloon_ptr,
+				 void *guest_req, int entries);
