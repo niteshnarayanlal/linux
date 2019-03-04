@@ -31,11 +31,16 @@ struct guest_isolated_pages {
 	unsigned int order;
 };
 
-void release_buddy_pages(void *obj_to_free, int entries)
+void (*request_hypercall)(void *balloon_ptr, void *guest_req, int entries);
+EXPORT_SYMBOL(request_hypercall);
+void *balloon_ptr;
+EXPORT_SYMBOL(balloon_ptr);
+
+void release_buddy_pages(void *guest_req, int entries)
 {
 	int i = 0;
 	int mt = 0;
-	struct guest_isolated_pages *isolated_pages_obj = obj_to_free;
+	struct guest_isolated_pages *isolated_pages_obj = guest_req;
 
 	while (i < entries) {
 		struct page *page = pfn_to_page(isolated_pages_obj[i].pfn);
@@ -51,7 +56,8 @@ void release_buddy_pages(void *obj_to_free, int entries)
 void guest_free_page_report(struct guest_isolated_pages *isolated_pages_obj,
 			    int entries)
 {
-	release_buddy_pages(isolated_pages_obj, entries);
+	if (balloon_ptr)
+		request_hypercall(balloon_ptr, isolated_pages_obj, entries);
 }
 
 static int sort_zonenum(const void *a1, const void *b1)
