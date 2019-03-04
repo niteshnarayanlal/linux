@@ -163,12 +163,16 @@ static void hinting_ack(struct virtqueue *vq)
 
 static void enable_hinting(struct virtio_balloon *vb)
 {
+	guest_page_hinting_flag = 1;
+	static_branch_enable(&guest_page_hinting_key);
 	request_hypercall = (void *)&virtballoon_page_hinting;
 	balloon_ptr = vb;
 }
 
 static void disable_hinting(void)
 {
+	guest_page_hinting_flag = 0;
+	static_branch_enable(&guest_page_hinting_key);
 	balloon_ptr = NULL;
 }
 #endif
