@@ -1,5 +1,9 @@
 #include <linux/gfp.h>
 #include <linux/mm.h>
+#include <linux/page_ref.h>
+#include <linux/kvm_host.h>
+#include <linux/kernel.h>
+#include <linux/sort.h>
 
 /*
  * struct guest_free_pages- holds array objects for the structures used to track
@@ -15,6 +19,54 @@ struct guest_free_pages {
 };
 
 DEFINE_PER_CPU(struct guest_free_pages, free_pages_obj);
+
+/*
+ * struct guest_isolated_pages- holds the buddy isolated pages which are
+ * supposed to be freed by the host.
+ * @pfn: page frame number for the isolated page.
+ * @order: order of the isolated page.
+ */
+struct guest_isolated_pages {
+	unsigned long pfn;
+	unsigned int order;
+};
+
+void release_buddy_pages(void *obj_to_free, int entries)
+{
+	int i = 0;
+	int mt = 0;
+	struct guest_isolated_pages *isolated_pages_obj = obj_to_free;
+
+	while (i < entries) {
+		struct page *page = pfn_to_page(isolated_pages_obj[i].pfn);
+
+		mt = get_pageblock_migratetype(page);
+		__free_one_page(page, page_to_pfn(page), page_zone(page),
+				isolated_pages_obj[i].order, mt);
+		i++;
+	}
+	kfree(isolated_pages_obj);
+}
+
+void guest_free_page_report(struct guest_isolated_pages *isolated_pages_obj,
+			    int entries)
+{
+	release_buddy_pages(isolated_pages_obj, entries);
+}
+
+static int sort_zonenum(const void *a1, const void *b1)
+{
+	const unsigned long *a = a1;
+	const unsigned long *b = b1;
+
+	if (page_zonenum(pfn_to_page(a[0])) > page_zonenum(pfn_to_page(b[0])))
+		return 1;
+
+	if (page_zonenum(pfn_to_page(a[0])) < page_zonenum(pfn_to_page(b[0])))
+		return -1;
+
+	return 0;
+}
 
 struct page *get_buddy_page(struct page *page)
 {
@@ -33,9 +85,110 @@ struct page *get_buddy_page(struct page *page)
 static void guest_free_page_hinting(void)
 {
 	struct guest_free_pages *hinting_obj = &get_cpu_var(free_pages_obj);
+	struct guest_isolated_pages *isolated_pages_obj;
+	int idx = 0, ret = 0;
+	struct zone *zone_cur, *zone_prev;
+	unsigned long flags = 0;
+	int hyp_idx = 0;
+
+	isolated_pages_obj = kmalloc(MAX_FGPT_ENTRIES *
+			sizeof(struct guest_isolated_pages), GFP_KERNEL);
+	if (!isolated_pages_obj) {
+		hinting_obj->free_pages_idx = 0;
+		put_cpu_var(hinting_obj);
+		return;
+		/* return some logical error here*/
+	}
+
+	sort(hinting_obj->free_page_arr, HINTING_THRESHOLD,
+	     sizeof(unsigned long), sort_zonenum, NULL);
+
+	while (idx < HINTING_THRESHOLD) {
+		unsigned long pfn = hinting_obj->free_page_arr[idx];
+		unsigned long pfn_end = hinting_obj->free_page_arr[idx] +
+			(1 << FREE_PAGE_HINTING_MIN_ORDER) - 1;
+
+		zone_cur = page_zone(pfn_to_page(pfn));
+		if (idx == 0) {
+			zone_prev = zone_cur;
+			spin_lock_irqsave(&zone_cur->lock, flags);
+		} else if (zone_prev != zone_cur) {
+			spin_unlock_irqrestore(&zone_prev->lock, flags);
+			spin_lock_irqsave(&zone_cur->lock, flags);
+			zone_prev = zone_cur;
+		}
+
+		while (pfn <= pfn_end) {
+			struct page *page = pfn_to_page(pfn);
+			struct page *buddy_page = NULL;
+
+			if (PageCompound(page)) {
+				struct page *head_page = compound_head(page);
+				unsigned long head_pfn = page_to_pfn(head_page);
+				unsigned int alloc_pages =
+					1 << compound_order(head_page);
+
+				pfn = head_pfn + alloc_pages;
+				continue;
+			}
+
+			if (page_ref_count(page)) {
+				pfn++;
+				continue;
+			}
+
+			if (PageBuddy(page) && page_private(page) >=
+			    FREE_PAGE_HINTING_MIN_ORDER) {
+				int buddy_order = page_private(page);
+
+				ret = __isolate_free_page(page, buddy_order);
+				if (ret) {
+					isolated_pages_obj[hyp_idx].pfn = pfn;
+					isolated_pages_obj[hyp_idx].order =
+								buddy_order;
+					hyp_idx += 1;
+				}
+				pfn = pfn + (1 << buddy_order);
+				continue;
+			}
+
+			buddy_page = get_buddy_page(page);
+			if (buddy_page && page_private(buddy_page) >=
+			    FREE_PAGE_HINTING_MIN_ORDER) {
+				int buddy_order = page_private(buddy_page);
+
+				ret = __isolate_free_page(buddy_page,
+							  buddy_order);
+				if (ret) {
+					unsigned long buddy_pfn =
+						page_to_pfn(buddy_page);
+
+					isolated_pages_obj[hyp_idx].pfn =
+								buddy_pfn;
+					isolated_pages_obj[hyp_idx].order =
+								buddy_order;
+					hyp_idx += 1;
+				}
+				pfn = page_to_pfn(buddy_page) +
+					(1 << buddy_order);
+				continue;
+			}
+			pfn++;
+		}
+		hinting_obj->free_page_arr[idx] = 0;
+		idx++;
+		if (idx == HINTING_THRESHOLD)
+			spin_unlock_irqrestore(&zone_cur->lock, flags);
+	}
 
 	hinting_obj->free_pages_idx = 0;
 	put_cpu_var(hinting_obj);
+
+	if (hyp_idx > 0)
+		guest_free_page_report(isolated_pages_obj, hyp_idx);
+	else
+		kfree(isolated_pages_obj);
+		/* return some logical error here*/
 }
 
 int if_exist(struct page *page)
