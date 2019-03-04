@@ -1194,9 +1194,11 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			mt = get_pageblock_migratetype(page);
 
 		__free_one_page(page, page_to_pfn(page), zone, 0, mt);
+		guest_free_page_enqueue(page, 0);
 		trace_mm_page_pcpu_drain(page, 0, mt);
 	}
 	spin_unlock(&zone->lock);
+	guest_free_page_try_hinting();
 }
 
 static void free_one_page(struct zone *zone,
@@ -1210,7 +1212,9 @@ static void free_one_page(struct zone *zone,
 		migratetype = get_pfnblock_migratetype(page, pfn);
 	}
 	__free_one_page(page, pfn, zone, order, migratetype);
+	guest_free_page_enqueue(page, order);
 	spin_unlock(&zone->lock);
+	guest_free_page_try_hinting();
 }
 
 static void __meminit __init_single_page(struct page *page, unsigned long pfn,
