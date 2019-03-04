@@ -43,6 +43,43 @@ static DEFINE_MUTEX(hinting_mutex);
 int guest_page_hinting_flag;
 EXPORT_SYMBOL(guest_page_hinting_flag);
 
+unsigned long total_freed, captured, scanned, total_isolated, tail_isolated;
+unsigned long failed_isolation, reallocated, free_non_buddy, guest_returned;
+int sys_init_cnt;
+
+#ifdef CONFIG_SYSFS
+#define HINTING_ATTR_RO(_name) \
+		static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
+
+static ssize_t hinting_memory_stats_show(struct kobject *kobj,
+					 struct kobj_attribute *attr,
+					 char *buf)
+{
+	return sprintf(buf, "total_freed_memory:%lu KB\ncaptued_memory:%lu KB\n"
+		       "scanned_memory:%lu KB\ntotal_isolated_memory:%lu KB\n"
+		       "tail_isolated_memory:%lu KB\n"
+		       "failed_isolation_memory:%lu KB\n"
+		       "reallocated_memory:%lu KB\n"
+		       "free_non_buddy_memory:%lu KB\n"
+		       "guest_returned_memory:%lu KB\n", total_freed, captured,
+		       scanned, total_isolated, tail_isolated,
+		       failed_isolation, reallocated,
+		       free_non_buddy, guest_returned);
+}
+
+HINTING_ATTR_RO(hinting_memory_stats);
+
+static struct attribute *hinting_attrs[] = {
+	&hinting_memory_stats_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group hinting_attr_group = {
+	.attrs = hinting_attrs,
+	.name = "hinting",
+};
+#endif
+
 int guest_page_hinting_sysctl(struct ctl_table *table, int write,
 			      void __user *buffer, size_t *lenp,
 			      loff_t *ppos)
@@ -64,10 +101,13 @@ void release_buddy_pages(void *guest_req, int entries)
 	int i = 0;
 	int mt = 0;
 	struct guest_isolated_pages *isolated_pages_obj = guest_req;
+	unsigned long mem = 0;
 
 	while (i < entries) {
 		struct page *page = pfn_to_page(isolated_pages_obj[i].pfn);
 
+		mem = (1 << FREE_PAGE_HINTING_MIN_ORDER) * 4;
+		guest_returned += mem;
 		mt = get_pageblock_migratetype(page);
 		__free_one_page(page, page_to_pfn(page), page_zone(page),
 				isolated_pages_obj[i].order, mt);
@@ -158,11 +198,15 @@ static void guest_free_page_hinting(void)
 				unsigned int alloc_pages =
 					1 << compound_order(head_page);
 
+				reallocated += (alloc_pages * 4);
+				scanned += (alloc_pages * 4);
 				pfn = head_pfn + alloc_pages;
 				continue;
 			}
 
 			if (page_ref_count(page)) {
+				reallocated += 4;
+				scanned += 4;
 				pfn++;
 				continue;
 			}
@@ -178,8 +222,14 @@ static void guest_free_page_hinting(void)
 					isolated_pages_obj[hyp_idx].pfn = pfn;
 					isolated_pages_obj[hyp_idx].order =
 								buddy_order;
+					total_isolated +=
+						(((1 << buddy_order) * 4));
 					hyp_idx += 1;
+				} else {
+					failed_isolation +=
+						((1 << buddy_order) * 4);
 				}
+				scanned += ((1 << buddy_order) * 4);
 				pfn = pfn + (1 << buddy_order);
 				continue;
 			}
@@ -201,12 +251,22 @@ static void guest_free_page_hinting(void)
 								buddy_pfn;
 					isolated_pages_obj[hyp_idx].order =
 								buddy_order;
+					total_isolated +=
+						(((1 << buddy_order) * 4));
+					tail_isolated +=
+						(((1 << buddy_order) * 4));
 					hyp_idx += 1;
+				} else {
+					failed_isolation +=
+						((1 << buddy_order) * 4);
 				}
+				scanned += ((1 << buddy_order) * 4);
 				pfn = page_to_pfn(buddy_page) +
 					(1 << buddy_order);
 				continue;
 			}
+			scanned += 4;
+			free_non_buddy += 4;
 			pfn++;
 		}
 		hinting_obj->free_page_arr[idx] = 0;
@@ -243,9 +303,16 @@ void guest_free_page_enqueue(struct page *page, int order)
 	unsigned long flags;
 	struct guest_free_pages *hinting_obj = this_cpu_ptr(&free_pages_obj);
 	int l_idx;
+	int err = 0;
 
 	if (!static_branch_unlikely(&guest_page_hinting_key))
 		return;
+	if (sys_init_cnt == 0) {
+		err = sysfs_create_group(mm_kobj, &hinting_attr_group);
+		if (err)
+			pr_err("hinting: register sysfs failed\n");
+		sys_init_cnt = 1;
+	}
 	/*
 	 * use of global variables may trigger a race condition between irq and
 	 * process context causing unwanted overwrites. This will be replaced
@@ -254,6 +321,7 @@ void guest_free_page_enqueue(struct page *page, int order)
 	local_irq_save(flags);
 	l_idx = hinting_obj->free_pages_idx;
 	trace_guest_free_page(page_to_pfn(page), order);
+	total_freed += (((1 << order) * 4));
 	if (l_idx != MAX_FGPT_ENTRIES) {
 		if (PageBuddy(page) && page_private(page) >=
 		    FREE_PAGE_HINTING_MIN_ORDER) {
@@ -261,6 +329,7 @@ void guest_free_page_enqueue(struct page *page, int order)
 						  l_idx);
 			hinting_obj->free_page_arr[l_idx] = page_to_pfn(page);
 			hinting_obj->free_pages_idx += 1;
+			captured += (((1 << order) * 4));
 		} else {
 			struct page *buddy_page = get_buddy_page(page);
 
@@ -277,6 +346,7 @@ void guest_free_page_enqueue(struct page *page, int order)
 				hinting_obj->free_page_arr[l_idx] =
 							buddy_pfn;
 				hinting_obj->free_pages_idx += 1;
+				captured += ((1 << buddy_order * 4));
 			}
 		}
 	}
