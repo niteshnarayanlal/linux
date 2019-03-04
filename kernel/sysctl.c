@@ -66,6 +66,7 @@
 #include <linux/kexec.h>
 #include <linux/bpf.h>
 #include <linux/mount.h>
+#include <linux/page_hinting.h>
 
 #include <linux/uaccess.h>
 #include <asm/processor.h>
@@ -1689,6 +1690,15 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= (void *)&mmap_rnd_compat_bits_min,
 		.extra2		= (void *)&mmap_rnd_compat_bits_max,
+	},
+#endif
+#ifdef CONFIG_KVM_FREE_PAGE_HINTING
+	{
+		.procname	= "guest-page-hinting",
+		.data		= &guest_page_hinting_flag,
+		.maxlen		= sizeof(guest_page_hinting_flag),
+		.mode		= 0644,
+		.proc_handler   = guest_page_hinting_sysctl,
 	},
 #endif
 	{ }
