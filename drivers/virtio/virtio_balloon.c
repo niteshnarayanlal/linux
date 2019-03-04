@@ -969,6 +969,11 @@ static int virtballoon_probe(struct virtio_device *vdev)
 	}
 
 #ifdef CONFIG_KVM_FREE_PAGE_HINTING
+	if (virtio_has_feature(vdev, VIRTIO_BALLOON_F_PAGE_POISON)) {
+		memset(&poison_val, PAGE_POISON, sizeof(poison_val));
+		virtio_cwrite(vb->vdev, struct virtio_balloon_config,
+			      poison_val, &poison_val);
+	}
 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING))
 		enable_hinting(vb);
 #endif
