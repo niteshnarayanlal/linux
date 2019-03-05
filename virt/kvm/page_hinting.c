@@ -4,6 +4,7 @@
 #include <linux/kvm_host.h>
 #include <linux/kernel.h>
 #include <linux/sort.h>
+#include <trace/events/kmem.h>
 
 /*
  * struct guest_free_pages- holds array objects for the structures used to track
@@ -178,6 +179,8 @@ static void guest_free_page_hinting(void)
 
 				ret = __isolate_free_page(page, buddy_order);
 				if (ret) {
+					trace_guest_isolated_page(pfn,
+								  buddy_order);
 					isolated_pages_obj[hyp_idx].pfn = pfn;
 					isolated_pages_obj[hyp_idx].order =
 								buddy_order;
@@ -198,6 +201,8 @@ static void guest_free_page_hinting(void)
 					unsigned long buddy_pfn =
 						page_to_pfn(buddy_page);
 
+					trace_guest_isolated_page(buddy_pfn,
+								  buddy_order);
 					isolated_pages_obj[hyp_idx].pfn =
 								buddy_pfn;
 					isolated_pages_obj[hyp_idx].order =
@@ -255,9 +260,12 @@ void guest_free_page_enqueue(struct page *page, int order)
 	local_irq_save(flags);
 	hinting_obj = this_cpu_ptr(&free_pages_obj);
 	l_idx = hinting_obj->free_pages_idx;
+	trace_guest_free_page(page_to_pfn(page), order);
 	if (l_idx != MAX_FGPT_ENTRIES) {
 		if (PageBuddy(page) && page_private(page) >=
 		    FREE_PAGE_HINTING_MIN_ORDER) {
+			trace_guest_captured_page(page_to_pfn(page), order,
+						  l_idx);
 			hinting_obj->free_page_arr[l_idx] = page_to_pfn(page);
 			hinting_obj->free_pages_idx += 1;
 		} else {
@@ -268,7 +276,11 @@ void guest_free_page_enqueue(struct page *page, int order)
 			    !if_exist(buddy_page)) {
 				unsigned long buddy_pfn =
 					page_to_pfn(buddy_page);
+				unsigned int buddy_order =
+					page_private(buddy_page);
 
+				trace_guest_captured_page(buddy_pfn,
+							  buddy_order, l_idx);
 				hinting_obj->free_page_arr[l_idx] =
 							buddy_pfn;
 				hinting_obj->free_pages_idx += 1;
