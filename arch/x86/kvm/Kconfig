@@ -96,6 +96,14 @@ config KVM_MMU_AUDIT
 	 This option adds a R/W kVM module parameter 'mmu_audit', which allows
 	 auditing of KVM MMU events at runtime.
 
+# KVM_FREE_PAGE_HINTING will allow the guest to report the free pages to the
+# host in regular interval of time.
+config KVM_FREE_PAGE_HINTING
+       def_bool y
+       depends on KVM
+       select VIRTIO
+       select VIRTIO_BALLOON
+
 # OK, it's a little counter-intuitive to do this, but it puts it neatly under
 # the virtualization menu.
 source "drivers/vhost/Kconfig"
