@@ -12,6 +12,8 @@
 #define FREE_PAGE_HINTING_MIN_ORDER	(MAX_ORDER - 1)
 
 extern void *balloon_ptr;
+extern int guest_free_page_hinting_flag;
+extern struct static_key_false guest_free_page_hinting_key;
 
 void guest_free_page_enqueue(struct page *page, int order);
 void guest_free_page_try_hinting(void);
@@ -22,3 +24,6 @@ extern void __free_one_page(struct page *page, unsigned long pfn,
 void release_buddy_pages(void *obj_to_free, int entries);
 extern int (*request_hypercall)(void *balloon_ptr,
 				void *hinting_req, int entries);
+int guest_free_page_hinting_sysctl(struct ctl_table *table, int write,
+				   void __user *buffer, size_t *lenp,
+				   loff_t *ppos);
