@@ -96,6 +96,9 @@
 #ifdef CONFIG_LOCKUP_DETECTOR
 #include <linux/nmi.h>
 #endif
+#ifdef CONFIG_KVM_FREE_PAGE_HINTING
+#include <linux/page_hinting.h>
+#endif
 
 #if defined(CONFIG_SYSCTL)
 
@@ -1689,6 +1692,15 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= (void *)&mmap_rnd_compat_bits_min,
 		.extra2		= (void *)&mmap_rnd_compat_bits_max,
+	},
+#endif
+#ifdef CONFIG_KVM_FREE_PAGE_HINTING
+	{
+		.procname       = "guest-free-page-hinting",
+		.data           = &guest_free_page_hinting_flag,
+		.maxlen         = sizeof(guest_free_page_hinting_flag),
+		.mode           = 0644,
+		.proc_handler   = guest_free_page_hinting_sysctl,
 	},
 #endif
 	{ }

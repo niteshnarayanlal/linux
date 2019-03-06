@@ -31,6 +31,7 @@ Currently, these files are in /proc/sys/vm:
 - dirty_writeback_centisecs
 - drop_caches
 - extfrag_threshold
+- guest_free_page_hinting
 - hugetlb_shm_group
 - laptop_mode
 - legacy_va_layout
@@ -252,6 +253,17 @@ implies that the allocation will succeed as long as watermarks are met.
 
 The kernel will not compact memory in a zone if the
 fragmentation index is <= extfrag_threshold. The default value is 500.
+
+==============================================================
+
+guest_free_page_hinting
+
+This parameter enables the kernel to report KVM guest free pages to the host
+via virtio balloon driver. QEMU receives these free page hints and frees them
+by performing MADVISE_DONTNEED on it.
+
+It depends on VIRTIO_BALLOON for its functionality. In case VIRTIO_BALLOON
+driver is missing, this feature is disabled by default.
 
 ==============================================================
 

@@ -36,6 +36,28 @@ EXPORT_SYMBOL(request_hypercall);
 void *balloon_ptr;
 EXPORT_SYMBOL(balloon_ptr);
 
+struct static_key_false guest_free_page_hinting_key  = STATIC_KEY_FALSE_INIT;
+EXPORT_SYMBOL(guest_free_page_hinting_key);
+static DEFINE_MUTEX(hinting_mutex);
+int guest_free_page_hinting_flag;
+EXPORT_SYMBOL(guest_free_page_hinting_flag);
+
+int guest_free_page_hinting_sysctl(struct ctl_table *table, int write,
+				   void __user *buffer, size_t *lenp,
+				   loff_t *ppos)
+{
+	int ret;
+
+	mutex_lock(&hinting_mutex);
+	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	if (guest_free_page_hinting_flag)
+		static_key_enable(&guest_free_page_hinting_key.key);
+	else
+		static_key_disable(&guest_free_page_hinting_key.key);
+	mutex_unlock(&hinting_mutex);
+	return ret;
+}
+
 void release_buddy_pages(void *hinting_req, int entries)
 {
 	int i = 0;
@@ -223,6 +245,8 @@ void guest_free_page_enqueue(struct page *page, int order)
 	struct guest_free_pages *hinting_obj;
 	int l_idx;
 
+	if (!static_branch_unlikely(&guest_free_page_hinting_key))
+		return;
 	/*
 	 * use of global variables may trigger a race condition between irq and
 	 * process context causing unwanted overwrites. This will be replaced
@@ -258,6 +282,8 @@ void guest_free_page_try_hinting(void)
 {
 	struct guest_free_pages *hinting_obj;
 
+	if (!static_branch_unlikely(&guest_free_page_hinting_key))
+		return;
 	hinting_obj = this_cpu_ptr(&free_pages_obj);
 	if (hinting_obj->free_pages_idx >= HINTING_THRESHOLD)
 		guest_free_page_hinting();
