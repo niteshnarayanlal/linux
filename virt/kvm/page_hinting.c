@@ -25,23 +25,23 @@ DEFINE_PER_CPU(struct guest_free_pages, free_pages_obj);
  * struct guest_isolated_pages- holds the buddy isolated pages which are
  * supposed to be freed by the host.
  * @pfn: page frame number for the isolated page.
- * @order: order of the isolated page.
+ * @len: isolated memory address length.
  */
 struct guest_isolated_pages {
 	unsigned long pfn;
-	unsigned int order;
+	unsigned long len;
 };
 
 int (*request_hypercall)(void *balloon_ptr, void *hinting_req, int entries);
-EXPORT_SYMBOL(request_hypercall);
+EXPORT_SYMBOL_GPL(request_hypercall);
 void *balloon_ptr;
-EXPORT_SYMBOL(balloon_ptr);
+EXPORT_SYMBOL_GPL(balloon_ptr);
 
 struct static_key_false guest_free_page_hinting_key  = STATIC_KEY_FALSE_INIT;
-EXPORT_SYMBOL(guest_free_page_hinting_key);
+EXPORT_SYMBOL_GPL(guest_free_page_hinting_key);
 static DEFINE_MUTEX(hinting_mutex);
 int guest_free_page_hinting_flag;
-EXPORT_SYMBOL(guest_free_page_hinting_flag);
+EXPORT_SYMBOL_GPL(guest_free_page_hinting_flag);
 
 int guest_free_page_hinting_sysctl(struct ctl_table *table, int write,
 				   void __user *buffer, size_t *lenp,
@@ -64,17 +64,22 @@ void release_buddy_pages(void *hinting_req, int entries)
 	int i = 0;
 	int mt = 0;
 	struct guest_isolated_pages *isolated_pages_obj = hinting_req;
+	unsigned long flags = 0;
 
 	while (i < entries) {
 		struct page *page = pfn_to_page(isolated_pages_obj[i].pfn);
+		struct zone *zone = page_zone(page);
 
+		spin_lock_irqsave(&zone->lock, flags);
 		mt = get_pageblock_migratetype(page);
-		__free_one_page(page, page_to_pfn(page), page_zone(page),
-				isolated_pages_obj[i].order, mt);
+		__free_one_page(page, page_to_pfn(page), zone,
+				ilog2(isolated_pages_obj[i].len/4), mt);
+		spin_unlock_irqrestore(&zone->lock, flags);
 		i++;
 	}
 	kfree(isolated_pages_obj);
 }
+EXPORT_SYMBOL_GPL(release_buddy_pages);
 
 void guest_free_page_report(struct guest_isolated_pages *isolated_pages_obj,
 			    int entries)
@@ -156,7 +161,6 @@ static void guest_free_page_hinting(void)
 
 		while (pfn <= pfn_end) {
 			struct page *page = pfn_to_page(pfn);
-			struct page *buddy_page = NULL;
 
 			if (PageCompound(page)) {
 				struct page *head_page = compound_head(page);
@@ -182,35 +186,10 @@ static void guest_free_page_hinting(void)
 					trace_guest_isolated_page(pfn,
 								  buddy_order);
 					isolated_pages_obj[hyp_idx].pfn = pfn;
-					isolated_pages_obj[hyp_idx].order =
-								buddy_order;
+					isolated_pages_obj[hyp_idx].len = (1 << buddy_order) * 4;
 					hyp_idx += 1;
 				}
 				pfn = pfn + (1 << buddy_order);
-				continue;
-			}
-
-			buddy_page = get_buddy_page(page);
-			if (buddy_page && page_private(buddy_page) >=
-			    FREE_PAGE_HINTING_MIN_ORDER) {
-				int buddy_order = page_private(buddy_page);
-
-				ret = __isolate_free_page(buddy_page,
-							  buddy_order);
-				if (ret) {
-					unsigned long buddy_pfn =
-						page_to_pfn(buddy_page);
-
-					trace_guest_isolated_page(buddy_pfn,
-								  buddy_order);
-					isolated_pages_obj[hyp_idx].pfn =
-								buddy_pfn;
-					isolated_pages_obj[hyp_idx].order =
-								buddy_order;
-					hyp_idx += 1;
-				}
-				pfn = page_to_pfn(buddy_page) +
-					(1 << buddy_order);
 				continue;
 			}
 			pfn++;
