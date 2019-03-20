@@ -3,12 +3,12 @@
  * Size of the array which is used to store the freed pages is defined by
  * MAX_FGPT_ENTRIES.
  */
-#define MAX_FGPT_ENTRIES	16
+#define MAX_FGPT_ENTRIES	32
 /*
  * Threshold value after which hinting needs to be initiated on the captured
  * free pages.
  */
-#define HINTING_THRESHOLD	8
+#define HINTING_THRESHOLD	16
 #define FREE_PAGE_HINTING_MIN_ORDER	(MAX_ORDER - 1)
 
 extern void *balloon_ptr;
