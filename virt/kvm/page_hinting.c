@@ -181,16 +181,14 @@ static void guest_free_page_hinting(void)
 			    FREE_PAGE_HINTING_MIN_ORDER) {
 				int buddy_order = page_private(page);
 
-//				if (zone_cur->free_area[buddy_order].nr_free > 256) {
-					ret = __isolate_free_page(page, buddy_order);
-					if (ret) {
-						trace_guest_isolated_page(pfn,
-									  buddy_order);
-						isolated_pages_obj[hyp_idx].pfn = pfn;
-						isolated_pages_obj[hyp_idx].len = (1 << buddy_order) * 4;
-						hyp_idx += 1;
-					}
-//				}
+				ret = __isolate_free_page(page, buddy_order);
+				if (ret) {
+					trace_guest_isolated_page(pfn,
+								  buddy_order);
+					isolated_pages_obj[hyp_idx].pfn = pfn;
+					isolated_pages_obj[hyp_idx].len = (1 << buddy_order) * 4;
+					hyp_idx += 1;
+				}
 				pfn = pfn + (1 << buddy_order);
 				continue;
 			}

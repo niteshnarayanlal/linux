@@ -135,6 +135,20 @@ static struct virtio_device_id id_table[] = {
 };
 
 #ifdef CONFIG_KVM_FREE_PAGE_HINTING
+bool virtqueue_kick_sync(struct virtqueue *vq)
+{
+	u32 len;
+
+	if (likely(virtqueue_kick(vq))) {
+		while (!virtqueue_get_buf(vq, &len) &&
+		       !virtqueue_is_broken(vq))
+			cpu_relax();
+		return true;
+	}
+	return false;
+}
+EXPORT_SYMBOL_GPL(virtqueue_kick_sync);
+
 int virtballoon_page_hinting(struct virtio_balloon *vb,
 			     void *hinting_req,
 			     int entries)
@@ -156,20 +170,10 @@ int virtballoon_page_hinting(struct virtio_balloon *vb,
 	sg_init_one(&sg, hint_req, sizeof(struct virtio_balloon_hint_req));
 	err = virtqueue_add_outbuf(vq, &sg, 1, hint_req, GFP_KERNEL);
 	if (!err)
-		virtqueue_kick(vb->hinting_vq);
-	else
-		kfree(hint_req);
+		virtqueue_kick_sync(vb->hinting_vq);
+
+	release_buddy_pages(hinting_req, entries);
 	return err;
-}
-
-static void hinting_ack(struct virtqueue *vq)
-{
-	int len = sizeof(struct virtio_balloon_hint_req);
-	struct virtio_balloon_hint_req *hint_req = virtqueue_get_buf(vq, &len);
-	void *v_addr = phys_to_virt(hint_req->phys_addr);
-
-	release_buddy_pages(v_addr, hint_req->count);
-	kfree(hint_req);
 }
 
 static void enable_hinting(struct virtio_balloon *vb)
@@ -558,7 +562,7 @@ static int init_vqs(struct virtio_balloon *vb)
 
 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING)) {
 		names[VIRTIO_BALLOON_VQ_HINTING] = "hinting_vq";
-		callbacks[VIRTIO_BALLOON_VQ_HINTING] = hinting_ack;
+		callbacks[VIRTIO_BALLOON_VQ_HINTING] = NULL;
 	}
 	err = vb->vdev->config->find_vqs(vb->vdev, VIRTIO_BALLOON_VQ_MAX,
 					 vqs, callbacks, names, NULL, NULL);

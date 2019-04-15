@@ -1,4 +1,5 @@
 #include <linux/gfp.h>
+#include <linux/mmzone.h>
 /*
  * Size of the array which is used to store the freed pages is defined by
  * MAX_FGPT_ENTRIES.
