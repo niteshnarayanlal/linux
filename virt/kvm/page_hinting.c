@@ -86,12 +86,9 @@ void guest_free_page_report(struct guest_isolated_pages *isolated_pages_obj,
 {
 	int err = 0;
 
-	if (balloon_ptr) {
+	if (balloon_ptr)
 		err = request_hypercall(balloon_ptr, isolated_pages_obj,
 					entries);
-		if (err)
-			release_buddy_pages(isolated_pages_obj, entries);
-	}
 }
 
 static int sort_zonenum(const void *a1, const void *b1)
@@ -200,14 +197,13 @@ static void guest_free_page_hinting(void)
 			spin_unlock_irqrestore(&zone_cur->lock, flags);
 	}
 
-	hinting_obj->free_pages_idx = 0;
-	put_cpu_var(hinting_obj);
-
 	if (hyp_idx > 0)
 		guest_free_page_report(isolated_pages_obj, hyp_idx);
 	else
 		kfree(isolated_pages_obj);
 		/* return some logical error here*/
+	hinting_obj->free_pages_idx = 0;
+	put_cpu_var(hinting_obj);
 }
 
 int if_exist(struct page *page)

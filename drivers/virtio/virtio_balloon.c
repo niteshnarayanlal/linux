@@ -173,6 +173,7 @@ int virtballoon_page_hinting(struct virtio_balloon *vb,
 		virtqueue_kick_sync(vb->hinting_vq);
 
 	release_buddy_pages(hinting_req, entries);
+	kfree(hint_req);
 	return err;
 }
 
