@@ -139,6 +139,7 @@ bool virtqueue_kick_sync(struct virtqueue *vq)
 {
 	u32 len;
 
+	printk("\nKicking...\n");
 	if (likely(virtqueue_kick(vq))) {
 		while (!virtqueue_get_buf(vq, &len) &&
 		       !virtqueue_is_broken(vq))
@@ -160,9 +161,8 @@ int virtballoon_page_hinting(struct virtio_balloon *vb,
 	struct virtio_balloon_hint_req *hint_req;
 	u64 gpaddr;
 
+	printk("\nKicking initiated...\n");
 	hint_req = kmalloc(sizeof(struct virtio_balloon_hint_req), GFP_KERNEL);
-	while (virtqueue_get_buf(vq, &unused))
-		;
 
 	gpaddr = virt_to_phys(hinting_req);
 	hint_req->phys_addr = cpu_to_virtio64(vb->vdev, gpaddr);
@@ -172,6 +172,7 @@ int virtballoon_page_hinting(struct virtio_balloon *vb,
 	if (!err)
 		virtqueue_kick_sync(vb->hinting_vq);
 
+	printk("\nReleasing pages back to the buddy...\n");
 	release_buddy_pages(hinting_req, entries);
 	kfree(hint_req);
 	return err;
@@ -183,6 +184,7 @@ static void enable_hinting(struct virtio_balloon *vb)
 	static_branch_enable(&guest_free_page_hinting_key);
 	request_hypercall = (void *)&virtballoon_page_hinting;
 	balloon_ptr = vb;
+	WARN_ON(smpboot_register_percpu_thread(&hinting_threads));
 }
 
 static void disable_hinting(void)

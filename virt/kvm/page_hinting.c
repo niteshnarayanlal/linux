@@ -42,6 +42,7 @@ EXPORT_SYMBOL_GPL(guest_free_page_hinting_key);
 static DEFINE_MUTEX(hinting_mutex);
 int guest_free_page_hinting_flag;
 EXPORT_SYMBOL_GPL(guest_free_page_hinting_flag);
+static DEFINE_PER_CPU(struct task_struct *, hinting_task);
 
 int guest_free_page_hinting_sysctl(struct ctl_table *table, int write,
 				   void __user *buffer, size_t *lenp,
@@ -73,7 +74,7 @@ void release_buddy_pages(void *hinting_req, int entries)
 		spin_lock_irqsave(&zone->lock, flags);
 		mt = get_pageblock_migratetype(page);
 		__free_one_page(page, page_to_pfn(page), zone,
-				ilog2(isolated_pages_obj[i].len/4), mt);
+				FREE_PAGE_HINTING_MIN_ORDER, mt);
 		spin_unlock_irqrestore(&zone->lock, flags);
 		i++;
 	}
@@ -86,6 +87,7 @@ void guest_free_page_report(struct guest_isolated_pages *isolated_pages_obj,
 {
 	int err = 0;
 
+	printk("\nReporting...entries:%d\n", entries);
 	if (balloon_ptr)
 		err = request_hypercall(balloon_ptr, isolated_pages_obj,
 					entries);
@@ -119,7 +121,7 @@ struct page *get_buddy_page(struct page *page)
 	return NULL;
 }
 
-static void guest_free_page_hinting(void)
+static void guest_free_page_hinting(unsigned int cpu)
 {
 	struct guest_free_pages *hinting_obj = &get_cpu_var(free_pages_obj);
 	struct guest_isolated_pages *isolated_pages_obj;
@@ -236,7 +238,7 @@ void guest_free_page_enqueue(struct page *page, int order)
 	hinting_obj = this_cpu_ptr(&free_pages_obj);
 	l_idx = hinting_obj->free_pages_idx;
 	trace_guest_free_page(page_to_pfn(page), order);
-	if (l_idx != MAX_FGPT_ENTRIES) {
+	if (l_idx != HINTING_THRESHOLD) {
 		if (PageBuddy(page) && page_private(page) >=
 		    FREE_PAGE_HINTING_MIN_ORDER) {
 			trace_guest_captured_page(page_to_pfn(page), order,
@@ -265,6 +267,26 @@ void guest_free_page_enqueue(struct page *page, int order)
 	local_irq_restore(flags);
 }
 
+static int hinting_should_run(unsigned int cpu)
+{
+	struct guest_free_pages *hinting_obj;
+
+	hinting_obj = this_cpu_ptr(&free_pages_obj);
+	if (hinting_obj->free_pages_idx == HINTING_THRESHOLD)
+		return 1;
+	else
+		return 0;
+}
+
+struct smp_hotplug_thread hinting_threads = {
+	.store                  = &hinting_task,
+	.thread_should_run      = hinting_should_run,
+	.thread_fn              = guest_free_page_hinting,
+	.thread_comm            = "hinting/%u",
+	.selfparking            = false,
+};
+EXPORT_SYMBOL(hinting_threads);
+
 void guest_free_page_try_hinting(void)
 {
 	struct guest_free_pages *hinting_obj;
@@ -273,5 +295,5 @@ void guest_free_page_try_hinting(void)
 		return;
 	hinting_obj = this_cpu_ptr(&free_pages_obj);
 	if (hinting_obj->free_pages_idx >= HINTING_THRESHOLD)
-		guest_free_page_hinting();
+		wake_up_process(__this_cpu_read(hinting_task));
 }
