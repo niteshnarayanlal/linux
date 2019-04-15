@@ -44,6 +44,42 @@ int guest_free_page_hinting_flag;
 EXPORT_SYMBOL_GPL(guest_free_page_hinting_flag);
 static DEFINE_PER_CPU(struct task_struct *, hinting_task);
 
+
+unsigned long total_freed, captured, scanned, total_isolated, tail_isolated;
+unsigned long failed_isolation, reallocated, free_non_buddy, guest_returned;
+int sys_init_cnt;
+
+#ifdef CONFIG_SYSFS
+#define HINTING_ATTR_RO(_name) \
+                static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
+
+static ssize_t hinting_memory_stats_show(struct kobject *kobj,
+                                         struct kobj_attribute *attr,
+                                         char *buf)
+{
+        return sprintf(buf, "total_freed_memory:%lu KB\ncaptued_memory:%lu KB\n"
+                       "scanned_memory:%lu KB\ntotal_isolated_memory:%lu KB\n"
+                       "tail_isolated_memory:%lu KB\nfailed_isolation_memory:%lu KB\n"
+                       "reallocated_memory:%lu KB\nfree_non_buddy_memory:%lu KB\n"
+                       "guest_returned_memory:%lu KB\n", total_freed, captured,
+                       scanned, total_isolated, tail_isolated,
+                       failed_isolation, reallocated,
+                       free_non_buddy, guest_returned);
+}
+
+HINTING_ATTR_RO(hinting_memory_stats);
+
+static struct attribute *hinting_attrs[] = {
+        &hinting_memory_stats_attr.attr,
+        NULL,
+};
+
+static const struct attribute_group hinting_attr_group = {
+        .attrs = hinting_attrs,
+        .name = "hinting",
+};
+#endif
+
 int guest_free_page_hinting_sysctl(struct ctl_table *table, int write,
 				   void __user *buffer, size_t *lenp,
 				   loff_t *ppos)
@@ -131,6 +167,7 @@ static void guest_free_page_hinting(unsigned int cpu)
 	int hyp_idx = 0;
 	int free_pages_idx = hinting_obj->free_pages_idx;
 
+	printk("\nScanner is awake....\n");
 	isolated_pages_obj = kmalloc(MAX_FGPT_ENTRIES *
 			sizeof(struct guest_isolated_pages), GFP_KERNEL);
 	if (!isolated_pages_obj) {
@@ -168,11 +205,15 @@ static void guest_free_page_hinting(unsigned int cpu)
 					1 << compound_order(head_page);
 
 				pfn = head_pfn + alloc_pages;
+				reallocated += (alloc_pages * 4);
+				scanned += (alloc_pages * 4);
 				continue;
 			}
 
 			if (page_ref_count(page)) {
 				pfn++;
+				reallocated += (4);
+                                scanned += (4);
 				continue;
 			}
 
@@ -186,11 +227,21 @@ static void guest_free_page_hinting(unsigned int cpu)
 								  buddy_order);
 					isolated_pages_obj[hyp_idx].pfn = pfn;
 					isolated_pages_obj[hyp_idx].len = (1 << buddy_order) * 4;
+					total_isolated +=
+                                                (((1 << buddy_order) * 4));
+                                        tail_isolated +=
+                                                (((1 << buddy_order) * 4));
 					hyp_idx += 1;
+				} else {
+					failed_isolation +=
+                                                ((1 << buddy_order) * 4);
 				}
+				scanned += ((1 << buddy_order) * 4);
 				pfn = pfn + (1 << buddy_order);
 				continue;
 			}
+			scanned += (4);
+                        free_non_buddy += (4);
 			pfn++;
 		}
 		hinting_obj->free_page_arr[idx] = 0;
@@ -238,6 +289,7 @@ void guest_free_page_enqueue(struct page *page, int order)
 	hinting_obj = this_cpu_ptr(&free_pages_obj);
 	l_idx = hinting_obj->free_pages_idx;
 	trace_guest_free_page(page_to_pfn(page), order);
+	total_freed += (((1 << order) * 4));
 	if (l_idx != HINTING_THRESHOLD) {
 		if (PageBuddy(page) && page_private(page) >=
 		    FREE_PAGE_HINTING_MIN_ORDER) {
@@ -245,6 +297,7 @@ void guest_free_page_enqueue(struct page *page, int order)
 						  l_idx);
 			hinting_obj->free_page_arr[l_idx] = page_to_pfn(page);
 			hinting_obj->free_pages_idx += 1;
+			captured += (((1 << order) * 4));
 		} else {
 			struct page *buddy_page = get_buddy_page(page);
 
@@ -261,6 +314,7 @@ void guest_free_page_enqueue(struct page *page, int order)
 				hinting_obj->free_page_arr[l_idx] =
 							buddy_pfn;
 				hinting_obj->free_pages_idx += 1;
+				captured += (((1 << buddy_order) * 4));
 			}
 		}
 	}
@@ -286,14 +340,21 @@ struct smp_hotplug_thread hinting_threads = {
 	.selfparking            = false,
 };
 EXPORT_SYMBOL(hinting_threads);
-
 void guest_free_page_try_hinting(void)
 {
 	struct guest_free_pages *hinting_obj;
+	int err;
 
 	if (!static_branch_unlikely(&guest_free_page_hinting_key))
 		return;
 	hinting_obj = this_cpu_ptr(&free_pages_obj);
-	if (hinting_obj->free_pages_idx >= HINTING_THRESHOLD)
+        if (sys_init_cnt == 0) {
+                err = sysfs_create_group(mm_kobj, &hinting_attr_group);
+                if (err)
+                        pr_err("hinting: register sysfs failed\n");
+                sys_init_cnt = 1;
+        }
+	if (hinting_obj->free_pages_idx >= HINTING_THRESHOLD) {
 		wake_up_process(__this_cpu_read(hinting_task));
+	}
 }
