@@ -1,6 +1,5 @@
 #include <linux/gfp.h>
 #include <linux/mmzone.h>
-#include <linux/smpboot.h>
 /*
  * Size of the array which is used to store the freed pages is defined by
  * MAX_FGPT_ENTRIES.
@@ -16,7 +15,7 @@
 extern void *balloon_ptr;
 extern int guest_free_page_hinting_flag;
 extern struct static_key_false guest_free_page_hinting_key;
-extern struct smp_hotplug_thread hinting_threads;
+extern struct work_struct hinting_work;
 
 void guest_free_page_enqueue(struct page *page, int order);
 void guest_free_page_try_hinting(void);
@@ -30,3 +29,4 @@ extern int (*request_hypercall)(void *balloon_ptr,
 int guest_free_page_hinting_sysctl(struct ctl_table *table, int write,
 				   void __user *buffer, size_t *lenp,
 				   loff_t *ppos);
+void init_hinting_wq(struct work_struct *work);

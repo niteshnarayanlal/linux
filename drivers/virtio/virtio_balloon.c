@@ -184,7 +184,7 @@ static void enable_hinting(struct virtio_balloon *vb)
 	static_branch_enable(&guest_free_page_hinting_key);
 	request_hypercall = (void *)&virtballoon_page_hinting;
 	balloon_ptr = vb;
-	WARN_ON(smpboot_register_percpu_thread(&hinting_threads));
+	INIT_WORK(&hinting_work, init_hinting_wq);
 }
 
 static void disable_hinting(void)
@@ -192,6 +192,8 @@ static void disable_hinting(void)
 	guest_free_page_hinting_flag = 0;
 	static_branch_enable(&guest_free_page_hinting_key);
 	balloon_ptr = NULL;
+	/* Do we need the following?*/
+//	cancel_delayed_work(&hinting_work);
 }
 #endif
 

@@ -36,14 +36,15 @@ int (*request_hypercall)(void *balloon_ptr, void *hinting_req, int entries);
 EXPORT_SYMBOL_GPL(request_hypercall);
 void *balloon_ptr;
 EXPORT_SYMBOL_GPL(balloon_ptr);
+struct work_struct hinting_work;
+EXPORT_SYMBOL(hinting_work);
+
 
 struct static_key_false guest_free_page_hinting_key  = STATIC_KEY_FALSE_INIT;
 EXPORT_SYMBOL_GPL(guest_free_page_hinting_key);
 static DEFINE_MUTEX(hinting_mutex);
 int guest_free_page_hinting_flag;
 EXPORT_SYMBOL_GPL(guest_free_page_hinting_flag);
-static DEFINE_PER_CPU(struct task_struct *, hinting_task);
-
 
 unsigned long total_freed, captured, scanned, total_isolated, tail_isolated;
 unsigned long failed_isolation, reallocated, free_non_buddy, guest_returned;
@@ -157,7 +158,7 @@ struct page *get_buddy_page(struct page *page)
 	return NULL;
 }
 
-static void guest_free_page_hinting(unsigned int cpu)
+static void guest_free_page_hinting(void)
 {
 	struct guest_free_pages *hinting_obj = &get_cpu_var(free_pages_obj);
 	struct guest_isolated_pages *isolated_pages_obj;
@@ -321,25 +322,11 @@ void guest_free_page_enqueue(struct page *page, int order)
 	local_irq_restore(flags);
 }
 
-static int hinting_should_run(unsigned int cpu)
+void init_hinting_wq(struct work_struct *work)
 {
-	struct guest_free_pages *hinting_obj;
-
-	hinting_obj = this_cpu_ptr(&free_pages_obj);
-	if (hinting_obj->free_pages_idx == HINTING_THRESHOLD)
-		return 1;
-	else
-		return 0;
+	guest_free_page_hinting();
 }
 
-struct smp_hotplug_thread hinting_threads = {
-	.store                  = &hinting_task,
-	.thread_should_run      = hinting_should_run,
-	.thread_fn              = guest_free_page_hinting,
-	.thread_comm            = "hinting/%u",
-	.selfparking            = false,
-};
-EXPORT_SYMBOL(hinting_threads);
 void guest_free_page_try_hinting(void)
 {
 	struct guest_free_pages *hinting_obj;
@@ -355,6 +342,11 @@ void guest_free_page_try_hinting(void)
                 sys_init_cnt = 1;
         }
 	if (hinting_obj->free_pages_idx >= HINTING_THRESHOLD) {
-		wake_up_process(__this_cpu_read(hinting_task));
+		int cpu_id = smp_processor_id();
+		/*
+		 * Scheduling work on a different CPU (not the CPU which generated the
+		 * request) could degrade performance???????
+		 */
+		queue_work_on(cpu_id, system_wq, &hinting_work);
 	}
 }
