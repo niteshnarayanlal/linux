@@ -139,7 +139,6 @@ bool virtqueue_kick_sync(struct virtqueue *vq)
 {
 	u32 len;
 
-	printk("\nKicking...\n");
 	if (likely(virtqueue_kick(vq))) {
 		while (!virtqueue_get_buf(vq, &len) &&
 		       !virtqueue_is_broken(vq))
@@ -157,11 +156,9 @@ int virtballoon_page_hinting(struct virtio_balloon *vb,
 	struct scatterlist sg;
 	struct virtqueue *vq = vb->hinting_vq;
 	int err;
-	int unused;
 	struct virtio_balloon_hint_req *hint_req;
 	u64 gpaddr;
 
-	printk("\nKicking initiated...\n");
 	hint_req = kmalloc(sizeof(struct virtio_balloon_hint_req), GFP_KERNEL);
 
 	gpaddr = virt_to_phys(hinting_req);
@@ -172,7 +169,6 @@ int virtballoon_page_hinting(struct virtio_balloon *vb,
 	if (!err)
 		virtqueue_kick_sync(vb->hinting_vq);
 
-	printk("\nReleasing pages back to the buddy...\n");
 	release_buddy_pages(hinting_req, entries);
 	kfree(hint_req);
 	return err;
@@ -180,6 +176,12 @@ int virtballoon_page_hinting(struct virtio_balloon *vb,
 
 static void enable_hinting(struct virtio_balloon *vb)
 {
+	bm_zone[0].bitmap = (unsigned long *)kmalloc(HINTING_BITMAP_SIZE, GFP_KERNEL);
+	bm_zone[1].bitmap = (unsigned long *)kmalloc(HINTING_BITMAP_SIZE, GFP_KERNEL);
+	bm_zone[2].bitmap = (unsigned long *)kmalloc(HINTING_BITMAP_SIZE, GFP_KERNEL);
+	memset(bm_zone[0].bitmap, 0, HINTING_BITMAP_SIZE);
+	memset(bm_zone[1].bitmap, 0, HINTING_BITMAP_SIZE);
+	memset(bm_zone[2].bitmap, 0, HINTING_BITMAP_SIZE);
 	guest_free_page_hinting_flag = 1;
 	static_branch_enable(&guest_free_page_hinting_key);
 	request_hypercall = (void *)&virtballoon_page_hinting;
@@ -192,6 +194,9 @@ static void disable_hinting(void)
 	guest_free_page_hinting_flag = 0;
 	static_branch_enable(&guest_free_page_hinting_key);
 	balloon_ptr = NULL;
+	kfree(bm_zone[0].bitmap);
+	kfree(bm_zone[1].bitmap);
+	kfree(bm_zone[2].bitmap);
 	/* Do we need the following?*/
 //	cancel_delayed_work(&hinting_work);
 }

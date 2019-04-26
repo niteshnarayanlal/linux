@@ -1,17 +1,22 @@
 #include <linux/gfp.h>
 #include <linux/mmzone.h>
 /*
- * Size of the array which is used to store the freed pages is defined by
- * MAX_FGPT_ENTRIES.
- */
-#define MAX_FGPT_ENTRIES	32
-/*
  * Threshold value after which hinting needs to be initiated on the captured
  * free pages.
  */
 #define HINTING_THRESHOLD	16
 #define FREE_PAGE_HINTING_MIN_ORDER	(MAX_ORDER - 1)
+#define HINTING_BITMAP_SIZE	300000
 
+struct hinting_bitmap {
+	unsigned long *bitmap;
+	struct zone *zone;
+	unsigned long free_mem_cnt;
+	struct mutex hbm_lock;
+};
+
+extern struct hinting_bitmap bm_zone[3];
+extern struct work_struct hinting_work;
 extern void *balloon_ptr;
 extern int guest_free_page_hinting_flag;
 extern struct static_key_false guest_free_page_hinting_key;
