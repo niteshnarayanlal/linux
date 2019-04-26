@@ -91,9 +91,13 @@ void release_buddy_pages(void *hinting_req, int entries)
 	printk("\nReleasing pages back to the buddy...\n");
 	while (i < entries) {
 		struct page *page = pfn_to_page(isolated_pages_obj[i].pfn);
+		int zonenum = page_zonenum(page);
 		struct zone *zone = page_zone(page);
+		unsigned long set_bit = (isolated_pages_obj[i].pfn - zone->zone_start_pfn) >> FREE_PAGE_HINTING_MIN_ORDER;
 
+		printk("\nReleasing PFN:%lu Bit:%lu Zone:%d zone_start_pfn:%lu\n", isolated_pages_obj[i].pfn, set_bit, zonenum, zone->zone_start_pfn);
 		spin_lock_irqsave(&zone->lock, flags);
+		bitmap_clear(bm_zone[zonenum].bitmap, set_bit, 1);
 		mt = get_pageblock_migratetype(page);
 		__free_one_page(page, page_to_pfn(page), zone,
 				FREE_PAGE_HINTING_MIN_ORDER, mt);
@@ -135,7 +139,7 @@ struct page *get_buddy_page(struct page *page)
 static void guest_free_page_hinting(int zonenum)
 {
 	unsigned long flags = 0;
-	unsigned long next_set_bit, start = 0;
+	unsigned long set_bit, start = 0, zero_bit = 0, nr_zero = 0;
 	struct page *page;
 	struct guest_isolated_pages *isolated_pages_obj;
 	int hyp_idx = 0;
@@ -151,12 +155,15 @@ static void guest_free_page_hinting(int zonenum)
 	printk("\n Scanning for zone:%d started...\n", zonenum);
 	spin_lock_irqsave(&bm_zone[zonenum].zone->lock, flags);
         for (;;) {
-               	next_set_bit = find_next_bit(bm_zone[zonenum].bitmap, HINTING_BITMAP_SIZE, start);
-		if (next_set_bit >= HINTING_BITMAP_SIZE || hyp_idx == HINTING_THRESHOLD) {
+		zero_bit = find_next_zero_bit(bm_zone[zonenum].bitmap, HINTING_BITMAP_SIZE, start);
+               	set_bit = find_next_bit(bm_zone[zonenum].bitmap, HINTING_BITMAP_SIZE, zero_bit);
+		nr_zero = set_bit - zero_bit;
+		start = zero_bit + nr_zero;
+		if (start >= HINTING_BITMAP_SIZE || hyp_idx == HINTING_THRESHOLD) {
 			break;
 		}
-	       	printk("\nBit position:%lu PFN:%lu\n", next_set_bit, (next_set_bit << FREE_PAGE_HINTING_MIN_ORDER) + bm_zone[zonenum].zone->zone_start_pfn);
-		page = pfn_to_page((next_set_bit << FREE_PAGE_HINTING_MIN_ORDER) + bm_zone[zonenum].zone->zone_start_pfn);
+	       	printk("\nBit position:%lu PFN:%lu start:%lu zero_bit:%lu\n", set_bit, (set_bit << FREE_PAGE_HINTING_MIN_ORDER) + bm_zone[zonenum].zone->zone_start_pfn, start, zero_bit);
+		page = pfn_to_page((set_bit << FREE_PAGE_HINTING_MIN_ORDER) + bm_zone[zonenum].zone->zone_start_pfn);
 		if (PageBuddy(page) && page_private(page) >= FREE_PAGE_HINTING_MIN_ORDER) {
 			int buddy_order = page_private(page);
 			unsigned long pfn = page_to_pfn(page);
@@ -174,8 +181,7 @@ static void guest_free_page_hinting(int zonenum)
 			}
 
 		}
-		printk("\nClearning the bit...\n");
-		bitmap_clear(bm_zone[zonenum].bitmap, next_set_bit, 1);
+//		printk("\nClearning the bit...\n");
 		bm_zone[zonenum].free_mem_cnt -= 1;
 	}
 	spin_unlock_irqrestore(&bm_zone[zonenum].zone->lock, flags);
@@ -192,18 +198,14 @@ void set_bitmap(struct page *page, int order, int zonenum)
 	int bitmap_no = 0;
 	struct zone *zone = page_zone(page);
 
-	printk("\nPFN:%lu Base PFN:%lu zone:%d\n", page_to_pfn(page), zone->zone_start_pfn, zonenum);
+	//printk("\nPFN:%lu Base PFN:%lu zone:%d\n", page_to_pfn(page), zone->zone_start_pfn, zonenum);
 	bitmap_no = (page_to_pfn(page) - zone->zone_start_pfn) >> FREE_PAGE_HINTING_MIN_ORDER;
-	if(page_to_pfn(page) == zone->zone_start_pfn)
-		printk("\nHere bitmap_no:%d\n", bitmap_no);
-	if (bitmap_no == 0)
-		printk("\n************************HERE*******************PFN:%lu Base PFN:%lu zone:%d\n", page_to_pfn(page), zone->zone_start_pfn, zonenum);
 	bm_zone[zonenum].zone = zone;
-	printk("\nBitmap no:%d\n", bitmap_no);
+	//printk("\nBitmap no:%d\n", bitmap_no);
 	/* ISSUE: We are probably stuck here as someone has already acquire the mutex lock???*/
-	printk("\nSetting bit now ...\n");
+	//printk("\nSetting bit now ...\n");
 	bitmap_set(bm_zone[zonenum].bitmap, bitmap_no, 1);
-	printk("\nBit is now set\n");
+	//printk("\nBit is now set\n");
 	bm_zone[zonenum].free_mem_cnt += 1;
 }
 
