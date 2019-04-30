@@ -88,7 +88,7 @@ void release_buddy_pages(void *hinting_req, int entries)
 	struct guest_isolated_pages *isolated_pages_obj = hinting_req;
 	unsigned long flags = 0;
 
-	printk("\nReleasing pages back to the buddy...\n");
+//	printk("\nReleasing pages back to the buddy...\n");
 	while (i < entries) {
 		struct page *page = pfn_to_page(isolated_pages_obj[i].pfn);
 		int zonenum = page_zonenum(page);
@@ -104,7 +104,7 @@ void release_buddy_pages(void *hinting_req, int entries)
 		spin_unlock_irqrestore(&zone->lock, flags);
 		i++;
 	}
-	printk("\nPages are now released\n");
+//	printk("\nPages are now released\n");
 }
 EXPORT_SYMBOL_GPL(release_buddy_pages);
 
@@ -119,7 +119,7 @@ void guest_free_page_report(struct guest_isolated_pages *isolated_pages_obj,
 					entries);
 	else
 		release_buddy_pages(isolated_pages_obj, entries);
-	printk("\nReporting is complete...\n");
+//	printk("\nReporting is complete...\n");
 }
 
 struct page *get_buddy_page(struct page *page)
@@ -165,7 +165,7 @@ static void guest_free_page_hinting(int zonenum)
 		/* return some logical error here*/
 	}
 
-	printk("\n Scanning for zone:%d started...\n", zonenum);
+//	printk("\n Scanning for zone:%d started...\n", zonenum);
         for (;;) {
 		set_bit = find_next_bit(bm_zone[zonenum].bitmap, HINTING_BITMAP_SIZE, start);
 		if (set_bit >= HINTING_BITMAP_SIZE ){
@@ -173,7 +173,6 @@ static void guest_free_page_hinting(int zonenum)
 			break;
 		}
 		scanned += (1 << FREE_PAGE_HINTING_MIN_ORDER) * 4; 
-//		printk("\nBit set is:%lu start:%lu \n", set_bit, start);
 
 		spin_lock_irqsave(&bm_zone[zonenum].zone->lock, flags);
 		page = pfn_to_page((set_bit << FREE_PAGE_HINTING_MIN_ORDER) + bm_zone[zonenum].zone->zone_start_pfn);
@@ -181,10 +180,8 @@ static void guest_free_page_hinting(int zonenum)
 			int buddy_order = page_private(page);
 			unsigned long pfn = page_to_pfn(page);
 
-//			printk("\nTrying to perform isolation for PFN:%lu bit number:%lu\n", pfn, set_bit);
 			ret = __isolate_free_page(page, buddy_order);
 			if (ret) {
-//				printk("\nPFN:%lu isolated at bit number:%lu\n", pfn, set_bit);
 				trace_guest_isolated_page(pfn, buddy_order);
 				isolated_pages_obj[hyp_idx].pfn = pfn;
 				isolated_pages_obj[hyp_idx].len = (1 << buddy_order) * 4;
@@ -195,10 +192,8 @@ static void guest_free_page_hinting(int zonenum)
 			}
 
 		}
-//		bitmap_clear(bm_zone[zonenum].bitmap, set_bit, 1);
 		spin_unlock_irqrestore(&bm_zone[zonenum].zone->lock, flags);
 		if (hyp_idx >= HINTING_THRESHOLD) {
-			printk("\nNumber of isolated entries:%d\n", hyp_idx);
 			guest_free_page_report(isolated_pages_obj, hyp_idx);
 			hyp_idx = 0;
 		}
@@ -208,7 +203,6 @@ static void guest_free_page_hinting(int zonenum)
 		int i = 0;
 		int mt = 0;
 
-		printk("\nNumber of isolated entries:%d\n", hyp_idx);
 		spin_lock_irqsave(&bm_zone[zonenum].zone->lock, flags);
 		while (i < hyp_idx) {
 			struct page *page = pfn_to_page(isolated_pages_obj[i].pfn);
@@ -216,13 +210,12 @@ static void guest_free_page_hinting(int zonenum)
 			mt = get_pageblock_migratetype(page);
 			__free_one_page(page, page_to_pfn(page), page_zone(page),
 			FREE_PAGE_HINTING_MIN_ORDER, mt);
-//			set_bitmap(page, FREE_PAGE_HINTING_MIN_ORDER, zonenum);
 			i++;
 		}
 		spin_unlock_irqrestore(&bm_zone[zonenum].zone->lock, flags);
 	}
 	kfree(isolated_pages_obj);
-	printk("\n Scanning for zone:%d over...\n", zonenum);
+//	printk("\n Scanning for zone:%d over...\n", zonenum);
 }
 
 void guest_free_page_enqueue(struct page *page, int order)
@@ -257,18 +250,11 @@ void guest_free_page_enqueue(struct page *page, int order)
 }
 
 void init_hinting_wq(struct work_struct *work)
-//{
-//}
-//void hinting_wq(void)
 {
 	int idx = 0;
 	while (idx < 3) {
 		if (atomic_read(&bm_zone[idx].free_mem_cnt) >= HINTING_THRESHOLD) {
-			long cnt = atomic_read(&bm_zone[idx].free_mem_cnt);
-			printk("\nZone num:%d threshold met, free memory count:%lu\n", idx, cnt);
-			cnt -= HINTING_THRESHOLD;
-			printk("\nAfter decrementingfree memory count:%lu\n", cnt);
-			atomic_set(&bm_zone[idx].free_mem_cnt, cnt);
+			atomic_sub(HINTING_THRESHOLD, &bm_zone[idx].free_mem_cnt);
 			guest_free_page_hinting(idx);
 		}
 		idx++;
@@ -297,6 +283,5 @@ void guest_free_page_try_hinting(void)
 		 * request) could degrade performance???????
 		 */
 		queue_work(system_wq, &hinting_work);
-//		hinting_wq();
 	}
 }
