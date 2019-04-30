@@ -91,13 +91,16 @@ void release_buddy_pages(void *hinting_req, int entries)
 	printk("\nReleasing pages back to the buddy...\n");
 	while (i < entries) {
 		struct page *page = pfn_to_page(isolated_pages_obj[i].pfn);
+		int zonenum = page_zonenum(page);
 		struct zone *zone = page_zone(page);
+		unsigned long bitmap_no = (page_to_pfn(page) - zone->zone_start_pfn) >> FREE_PAGE_HINTING_MIN_ORDER;
 
 		spin_lock_irqsave(&zone->lock, flags);
 		mt = get_pageblock_migratetype(page);
 		__free_one_page(page, page_to_pfn(page), zone,
 				FREE_PAGE_HINTING_MIN_ORDER, mt);
 		guest_returned += (1 << FREE_PAGE_HINTING_MIN_ORDER) * 4;
+		bitmap_clear(bm_zone[zonenum].bitmap, bitmap_no, 1);
 		spin_unlock_irqrestore(&zone->lock, flags);
 		i++;
 	}
@@ -192,7 +195,7 @@ static void guest_free_page_hinting(int zonenum)
 			}
 
 		}
-		bitmap_clear(bm_zone[zonenum].bitmap, set_bit, 1);
+//		bitmap_clear(bm_zone[zonenum].bitmap, set_bit, 1);
 		spin_unlock_irqrestore(&bm_zone[zonenum].zone->lock, flags);
 		if (hyp_idx >= HINTING_THRESHOLD) {
 			printk("\nNumber of isolated entries:%d\n", hyp_idx);
@@ -213,7 +216,7 @@ static void guest_free_page_hinting(int zonenum)
 			mt = get_pageblock_migratetype(page);
 			__free_one_page(page, page_to_pfn(page), page_zone(page),
 			FREE_PAGE_HINTING_MIN_ORDER, mt);
-			set_bitmap(page, FREE_PAGE_HINTING_MIN_ORDER, zonenum);
+//			set_bitmap(page, FREE_PAGE_HINTING_MIN_ORDER, zonenum);
 			i++;
 		}
 		spin_unlock_irqrestore(&bm_zone[zonenum].zone->lock, flags);
