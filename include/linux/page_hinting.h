@@ -11,7 +11,7 @@
 struct hinting_bitmap {
 	unsigned long *bitmap;
 	struct zone *zone;
-	unsigned long free_mem_cnt;
+	atomic_t free_mem_cnt;
 	struct mutex hbm_lock;
 };
 
