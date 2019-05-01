@@ -6,13 +6,12 @@
  */
 #define HINTING_THRESHOLD	16
 #define FREE_PAGE_HINTING_MIN_ORDER	(MAX_ORDER - 1)
-#define HINTING_BITMAP_SIZE	300000
 
 struct hinting_bitmap {
 	unsigned long *bitmap;
 	struct zone *zone;
 	atomic_t free_mem_cnt;
-	struct mutex hbm_lock;
+	unsigned long bm_size;
 };
 
 extern struct hinting_bitmap bm_zone[3];

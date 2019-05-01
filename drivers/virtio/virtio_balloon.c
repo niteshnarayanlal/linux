@@ -174,14 +174,27 @@ int virtballoon_page_hinting(struct virtio_balloon *vb,
 	return err;
 }
 
+#include <linux/mmzone.h>
 static void enable_hinting(struct virtio_balloon *vb)
 {
-	bm_zone[0].bitmap = (unsigned long *)kmalloc(HINTING_BITMAP_SIZE, GFP_KERNEL);
-	bm_zone[1].bitmap = (unsigned long *)kmalloc(HINTING_BITMAP_SIZE, GFP_KERNEL);
-	bm_zone[2].bitmap = (unsigned long *)kmalloc(HINTING_BITMAP_SIZE, GFP_KERNEL);
-	memset(bm_zone[0].bitmap, 0, HINTING_BITMAP_SIZE);
-	memset(bm_zone[1].bitmap, 0, HINTING_BITMAP_SIZE);
-	memset(bm_zone[2].bitmap, 0, HINTING_BITMAP_SIZE);
+	int idx = 0;
+	unsigned long total_pages = 0;
+	unsigned long bitmap_size = 0;
+
+	for_each_online_node(idx) {
+		printk("\nNode:%d pages:%lu\n", idx, node_spanned_pages(idx));
+		total_pages += node_spanned_pages(idx);
+		idx++;
+	}
+	bitmap_size = total_pages/(1 << FREE_PAGE_HINTING_MIN_ORDER);
+	printk("\nTotal pages available are:%lu Bitmap size:%lu\n", total_pages, bitmap_size);
+	idx = 0;
+	while (idx < 3) {
+		bm_zone[idx].bitmap = (unsigned long *)kmalloc(bitmap_size, GFP_KERNEL);
+		memset(bm_zone[idx].bitmap, 0, bitmap_size);
+		bm_zone[idx].bm_size = bitmap_size;
+		idx++;
+	}
 	guest_free_page_hinting_flag = 1;
 	static_branch_enable(&guest_free_page_hinting_key);
 	request_hypercall = (void *)&virtballoon_page_hinting;

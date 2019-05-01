@@ -88,7 +88,6 @@ void release_buddy_pages(void *hinting_req, int entries)
 	struct guest_isolated_pages *isolated_pages_obj = hinting_req;
 	unsigned long flags = 0;
 
-//	printk("\nReleasing pages back to the buddy...\n");
 	while (i < entries) {
 		struct page *page = pfn_to_page(isolated_pages_obj[i].pfn);
 		int zonenum = page_zonenum(page);
@@ -104,7 +103,6 @@ void release_buddy_pages(void *hinting_req, int entries)
 		spin_unlock_irqrestore(&zone->lock, flags);
 		i++;
 	}
-//	printk("\nPages are now released\n");
 }
 EXPORT_SYMBOL_GPL(release_buddy_pages);
 
@@ -119,7 +117,6 @@ void guest_free_page_report(struct guest_isolated_pages *isolated_pages_obj,
 					entries);
 	else
 		release_buddy_pages(isolated_pages_obj, entries);
-//	printk("\nReporting is complete...\n");
 }
 
 struct page *get_buddy_page(struct page *page)
@@ -142,7 +139,6 @@ void set_bitmap(struct page *page, int order, int zonenum)
 	struct zone *zone = page_zone(page);
 
 	bitmap_no = (page_to_pfn(page) - zone->zone_start_pfn) >> FREE_PAGE_HINTING_MIN_ORDER;
-//	printk("\nPFN:%lu Base PFN:%lu Bit:%lu zone:%d\n", page_to_pfn(page), zone->zone_start_pfn, bitmap_no, zonenum);
 	bm_zone[zonenum].zone = zone;
 	bitmap_set(bm_zone[zonenum].bitmap, bitmap_no, 1);
 	atomic_inc(&bm_zone[zonenum].free_mem_cnt);
@@ -152,7 +148,7 @@ void set_bitmap(struct page *page, int order, int zonenum)
 static void guest_free_page_hinting(int zonenum)
 {
 	unsigned long flags = 0;
-	unsigned long set_bit, start = 0, zero_bit = 0, nr_zero = 0;
+	unsigned long set_bit, start = 0;
 	struct page *page;
 	struct guest_isolated_pages *isolated_pages_obj;
 	int hyp_idx = 0;
@@ -165,10 +161,9 @@ static void guest_free_page_hinting(int zonenum)
 		/* return some logical error here*/
 	}
 
-//	printk("\n Scanning for zone:%d started...\n", zonenum);
         for (;;) {
-		set_bit = find_next_bit(bm_zone[zonenum].bitmap, HINTING_BITMAP_SIZE, start);
-		if (set_bit >= HINTING_BITMAP_SIZE ){
+		set_bit = find_next_bit(bm_zone[zonenum].bitmap, bm_zone[zonenum].bm_size, start);
+		if (set_bit >= bm_zone[zonenum].bm_size ){
 			//|| hyp_idx == HINTING_THRESHOLD) {
 			break;
 		}
@@ -215,7 +210,6 @@ static void guest_free_page_hinting(int zonenum)
 		spin_unlock_irqrestore(&bm_zone[zonenum].zone->lock, flags);
 	}
 	kfree(isolated_pages_obj);
-//	printk("\n Scanning for zone:%d over...\n", zonenum);
 }
 
 void guest_free_page_enqueue(struct page *page, int order)
