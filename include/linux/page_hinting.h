@@ -9,7 +9,7 @@
 
 struct hinting_bitmap {
 	unsigned long *bitmap;
-	struct zone *zone;
+	unsigned long base_pfn;
 	atomic_t free_mem_cnt;
 	unsigned long bm_size;
 };

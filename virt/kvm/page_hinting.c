@@ -139,7 +139,7 @@ void set_bitmap(struct page *page, int order, int zonenum)
 	struct zone *zone = page_zone(page);
 
 	bitmap_no = (page_to_pfn(page) - zone->zone_start_pfn) >> FREE_PAGE_HINTING_MIN_ORDER;
-	bm_zone[zonenum].zone = zone;
+	bm_zone[zonenum].base_pfn = zone->zone_start_pfn;
 	bitmap_set(bm_zone[zonenum].bitmap, bitmap_no, 1);
 	atomic_inc(&bm_zone[zonenum].free_mem_cnt);
 	captured += (((1 << order) * 4));
@@ -150,6 +150,7 @@ static void guest_free_page_hinting(int zonenum)
 	unsigned long flags = 0;
 	unsigned long set_bit, start = 0;
 	struct page *page;
+	struct zone *zone;
 	struct guest_isolated_pages *isolated_pages_obj;
 	int hyp_idx = 0;
 	int ret = 0;
@@ -164,13 +165,13 @@ static void guest_free_page_hinting(int zonenum)
         for (;;) {
 		set_bit = find_next_bit(bm_zone[zonenum].bitmap, bm_zone[zonenum].bm_size, start);
 		if (set_bit >= bm_zone[zonenum].bm_size ){
-			//|| hyp_idx == HINTING_THRESHOLD) {
 			break;
 		}
 		scanned += (1 << FREE_PAGE_HINTING_MIN_ORDER) * 4; 
 
-		spin_lock_irqsave(&bm_zone[zonenum].zone->lock, flags);
-		page = pfn_to_page((set_bit << FREE_PAGE_HINTING_MIN_ORDER) + bm_zone[zonenum].zone->zone_start_pfn);
+		page = pfn_to_page((set_bit << FREE_PAGE_HINTING_MIN_ORDER) + bm_zone[zonenum].base_pfn);
+		zone = page_zone(page);
+		spin_lock_irqsave(&zone->lock, flags);
 		if (PageBuddy(page) && page_private(page) >= FREE_PAGE_HINTING_MIN_ORDER) {
 			int buddy_order = page_private(page);
 			unsigned long pfn = page_to_pfn(page);
@@ -187,7 +188,7 @@ static void guest_free_page_hinting(int zonenum)
 			}
 
 		}
-		spin_unlock_irqrestore(&bm_zone[zonenum].zone->lock, flags);
+		spin_unlock_irqrestore(&zone->lock, flags);
 		if (hyp_idx >= HINTING_THRESHOLD) {
 			guest_free_page_report(isolated_pages_obj, hyp_idx);
 			hyp_idx = 0;
@@ -198,7 +199,7 @@ static void guest_free_page_hinting(int zonenum)
 		int i = 0;
 		int mt = 0;
 
-		spin_lock_irqsave(&bm_zone[zonenum].zone->lock, flags);
+		spin_lock_irqsave(&zone->lock, flags);
 		while (i < hyp_idx) {
 			struct page *page = pfn_to_page(isolated_pages_obj[i].pfn);
 
@@ -207,7 +208,7 @@ static void guest_free_page_hinting(int zonenum)
 			FREE_PAGE_HINTING_MIN_ORDER, mt);
 			i++;
 		}
-		spin_unlock_irqrestore(&bm_zone[zonenum].zone->lock, flags);
+		spin_unlock_irqrestore(&zone->lock, flags);
 	}
 	kfree(isolated_pages_obj);
 }
@@ -276,6 +277,7 @@ void guest_free_page_try_hinting(void)
 		 * Scheduling work on a different CPU (not the CPU which generated the
 		 * request) could degrade performance???????
 		 */
+		//queue_work_on(cpu_id, system_wq, &hinting_work);
 		queue_work(system_wq, &hinting_work);
 	}
 }

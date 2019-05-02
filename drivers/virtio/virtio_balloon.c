@@ -174,7 +174,6 @@ int virtballoon_page_hinting(struct virtio_balloon *vb,
 	return err;
 }
 
-#include <linux/mmzone.h>
 static void enable_hinting(struct virtio_balloon *vb)
 {
 	int idx = 0;
