@@ -2,6 +2,7 @@
 #include <linux/slab.h>
 #include <linux/page_hinting.h>
 #include <linux/kvm_host.h>
+#include <trace/events/kmem.h>
 
 /*
  * struct hinitng_bitmap: holds the bitmap pointer which tracks the freed PFNs
@@ -187,6 +188,7 @@ static void guest_free_page_hinting(int zonenum)
 
 			ret = __isolate_free_page(page, buddy_order);
 			if (ret) {
+				trace_guest_isolated_page(pfn, buddy_order);
 				isolated_pages_obj[isolated_idx].pfn = pfn;
 				isolated_pages_obj[isolated_idx].len =
 					(1 << buddy_order) * 4;
@@ -226,6 +228,7 @@ void guest_free_page_enqueue(struct page *page, int order)
 {
 	if (!static_branch_unlikely(&guest_free_page_hinting_key))
 		return;
+	trace_guest_free_page(page_to_pfn(page), order);
 	if (PageBuddy(page) && order >= FREE_PAGE_HINTING_MIN_ORDER) {
 		set_bitmap(page, page_zonenum(page));
 	} else {

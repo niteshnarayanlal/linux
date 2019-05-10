@@ -315,6 +315,68 @@ TRACE_EVENT(mm_page_alloc_extfrag,
 		__entry->change_ownership)
 );
 
+TRACE_EVENT(guest_free_page,
+	    TP_PROTO(unsigned long pfn, unsigned int order),
+
+	TP_ARGS(pfn, order),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, order)
+	),
+
+	TP_fast_assign(
+		__entry->pfn            = pfn;
+		__entry->order          = order;
+	),
+
+	TP_printk("pfn=%lu order=%d",
+		  __entry->pfn,
+		  __entry->order)
+);
+
+TRACE_EVENT(guest_isolated_page,
+	    TP_PROTO(unsigned long pfn, unsigned int order),
+
+	TP_ARGS(pfn, order),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, order)
+	),
+
+	TP_fast_assign(
+		__entry->pfn            = pfn;
+		__entry->order          = order;
+	),
+
+	TP_printk("pfn=%lu order=%u",
+		  __entry->pfn,
+		  __entry->order)
+);
+
+TRACE_EVENT(guest_captured_page,
+	    TP_PROTO(unsigned long pfn, unsigned int order, int idx),
+
+	TP_ARGS(pfn, order, idx),
+
+	TP_STRUCT__entry(
+		__field(unsigned long, pfn)
+		__field(unsigned int, order)
+		__field(int, idx)
+	),
+
+	TP_fast_assign(
+		__entry->pfn		= pfn;
+		__entry->order		= order;
+		__entry->idx		= idx;
+	),
+
+	TP_printk("pfn=%lu order=%u array_index=%d",
+		  __entry->pfn,
+		  __entry->order,
+		  __entry->idx)
+);
 #endif /* _TRACE_KMEM_H */
 
 /* This part must be outside protection */
