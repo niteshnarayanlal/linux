@@ -22,6 +22,18 @@ struct hinting_bitmap {
 	unsigned long bm_size;
 } bm_zone[MAX_ZONES];
 
+/*
+ * struct guest_isolated_pages- holds the buddy isolated pages which are
+ * supposed to be freed by the host.
+ * @pfn: page frame number for the isolated page.
+ * @order: order of the isolated page.
+ */
+struct guest_isolated_pages {
+	unsigned long pfn;
+	unsigned long len;
+	unsigned int order;
+};
+
 struct work_struct hinting_work;
 void init_hinting_wq(struct work_struct *work);
 
@@ -92,6 +104,38 @@ struct page *get_buddy_page(struct page *page)
 	return NULL;
 }
 
+
+void release_buddy_pages(void *hinting_req, int entries)
+{
+	int i = 0, mt = 0, zonenum;
+	struct page *page;
+	struct zone *zone;
+	struct guest_isolated_pages *isolated_pages_obj = hinting_req;
+	unsigned long flags = 0, bitmap_no;
+
+	while (i < entries) {
+		page = pfn_to_page(isolated_pages_obj[i].pfn);
+		zonenum = page_zonenum(page);
+		zone = page_zone(page);
+		bitmap_no = (isolated_pages_obj[i].pfn - zone->zone_start_pfn)
+				>> FREE_PAGE_HINTING_MIN_ORDER;
+
+		spin_lock_irqsave(&zone->lock, flags);
+		mt = get_pageblock_migratetype(page);
+		__free_one_page(page, page_to_pfn(page), zone,
+				isolated_pages_obj[i].order, mt);
+		bitmap_clear(bm_zone[zonenum].bitmap, bitmap_no, 1);
+		spin_unlock_irqrestore(&zone->lock, flags);
+		i++;
+	}
+}
+
+void guest_free_page_report(struct guest_isolated_pages *isolated_pages_obj,
+			    int entries)
+{
+	release_buddy_pages(isolated_pages_obj, entries);
+}
+
 void set_bitmap(struct page *page, int zonenum)
 {
 	int bitmap_no = 0;
@@ -105,6 +149,67 @@ void set_bitmap(struct page *page, int zonenum)
 
 static void guest_free_page_hinting(int zonenum)
 {
+	unsigned long flags = 0;
+	unsigned long set_bit, start = 0;
+	struct page *page;
+	struct zone *zone;
+	struct guest_isolated_pages *isolated_pages_obj;
+	int isolated_idx = 0;
+	int ret = 0;
+
+	isolated_pages_obj = kmalloc(HINTING_THRESHOLD *
+			sizeof(struct guest_isolated_pages), GFP_KERNEL);
+	if (!isolated_pages_obj)
+		return;
+	for (;;) {
+		set_bit = find_next_bit(bm_zone[zonenum].bitmap,
+					bm_zone[zonenum].bm_size, start);
+		if (set_bit >= bm_zone[zonenum].bm_size)
+			break;
+		page = pfn_to_page((set_bit << FREE_PAGE_HINTING_MIN_ORDER) +
+				bm_zone[zonenum].base_pfn);
+		zone = page_zone(page);
+		spin_lock_irqsave(&zone->lock, flags);
+		if (PageBuddy(page) && page_private(page) >=
+		    FREE_PAGE_HINTING_MIN_ORDER) {
+			int buddy_order = page_private(page);
+			unsigned long pfn = page_to_pfn(page);
+
+			ret = __isolate_free_page(page, buddy_order);
+			if (ret) {
+				isolated_pages_obj[isolated_idx].pfn = pfn;
+				isolated_pages_obj[isolated_idx].len =
+					(1 << buddy_order) * 4;
+				isolated_pages_obj[isolated_idx].order =
+					buddy_order;
+				isolated_idx += 1;
+			}
+		}
+		spin_unlock_irqrestore(&zone->lock, flags);
+		if (isolated_idx >= HINTING_THRESHOLD) {
+			guest_free_page_report(isolated_pages_obj,
+					       isolated_idx);
+			isolated_idx = 0;
+		}
+		start = set_bit + 1;
+	}
+	if (isolated_idx > 0) {
+		int i = 0;
+		int mt = 0;
+
+		spin_lock_irqsave(&zone->lock, flags);
+		while (i < isolated_idx) {
+			unsigned long pfn = isolated_pages_obj[i].pfn;
+			struct page *page = pfn_to_page(pfn);
+
+			mt = get_pageblock_migratetype(page);
+			__free_one_page(page, page_to_pfn(page), zone,
+					isolated_pages_obj[i].order, mt);
+			i++;
+		}
+		spin_unlock_irqrestore(&zone->lock, flags);
+	}
+	kfree(isolated_pages_obj);
 }
 
 void guest_free_page_enqueue(struct page *page, int order)
