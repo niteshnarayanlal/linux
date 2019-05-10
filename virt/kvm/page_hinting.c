@@ -41,6 +41,9 @@ int guest_free_page_hinting_flag;
 struct static_key_false guest_free_page_hinting_key;
 static DEFINE_MUTEX(hinting_mutex);
 
+void *vb_obj;
+void (*request_hypercall)(void *vb_obj, void *hinting_req, int entries);
+
 int guest_free_page_hinting_sysctl(struct ctl_table *table, int write,
 				   void __user *buffer, size_t *lenp,
 				   loff_t *ppos)
@@ -57,7 +60,8 @@ int guest_free_page_hinting_sysctl(struct ctl_table *table, int write,
 	return ret;
 }
 
-void guest_free_page_hinting_enable(void)
+void guest_free_page_hinting_enable(void *vb,
+				    void (*vb_callback)(void *, void *, int))
 {
 	struct zone *zone;
 	int idx = 0;
@@ -71,6 +75,8 @@ void guest_free_page_hinting_enable(void)
 		bm_zone[idx].base_pfn = zone->zone_start_pfn;
 		idx++;
 	}
+	vb_obj = vb;
+	request_hypercall = vb_callback;
 	guest_free_page_hinting_flag = 1;
 	static_branch_enable(&guest_free_page_hinting_key);
 	INIT_WORK(&hinting_work, init_hinting_wq);
@@ -83,6 +89,7 @@ void guest_free_page_hinting_disable(void)
 	int idx = 0;
 
 	cancel_work_sync(&hinting_work);
+	vb_obj = NULL;
 	for_each_zone(zone)
 		kfree(bm_zone[idx++].bitmap);
 	guest_free_page_hinting_flag = 0;
@@ -133,6 +140,9 @@ void release_buddy_pages(void *hinting_req, int entries)
 void guest_free_page_report(struct guest_isolated_pages *isolated_pages_obj,
 			    int entries)
 {
+	if (vb_obj)
+		request_hypercall(vb_obj, isolated_pages_obj,
+				  entries);
 	release_buddy_pages(isolated_pages_obj, entries);
 }
 

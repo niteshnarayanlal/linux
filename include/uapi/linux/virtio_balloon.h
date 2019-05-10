@@ -29,6 +29,7 @@
 #include <linux/virtio_types.h>
 #include <linux/virtio_ids.h>
 #include <linux/virtio_config.h>
+#include <linux/page_hinting.h>
 
 /* The feature bitmap for virtio balloon */
 #define VIRTIO_BALLOON_F_MUST_TELL_HOST	0 /* Tell before reclaiming pages */
@@ -109,4 +110,10 @@ struct virtio_balloon_stat {
 	__virtio64 val;
 } __attribute__((packed));
 
+#ifdef CONFIG_KVM_FREE_PAGE_HINTING
+struct virtio_balloon_hint_req {
+	__virtio64 phys_addr;
+	__virtio64 count;
+};
+#endif
 #endif /* _LINUX_VIRTIO_BALLOON_H */

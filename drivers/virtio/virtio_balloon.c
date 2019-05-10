@@ -59,6 +59,7 @@ enum virtio_balloon_vq {
 	VIRTIO_BALLOON_VQ_DEFLATE,
 	VIRTIO_BALLOON_VQ_STATS,
 	VIRTIO_BALLOON_VQ_FREE_PAGE,
+	VIRTIO_BALLOON_VQ_HINTING,
 	VIRTIO_BALLOON_VQ_MAX
 };
 
@@ -68,7 +69,8 @@ enum virtio_balloon_config_read {
 
 struct virtio_balloon {
 	struct virtio_device *vdev;
-	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *free_page_vq;
+	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *free_page_vq,
+			 *hinting_vq;
 
 	/* Balloon's own wq for cpu-intensive work items */
 	struct workqueue_struct *balloon_wq;
@@ -132,6 +134,44 @@ static struct virtio_device_id id_table[] = {
 	{ VIRTIO_ID_BALLOON, VIRTIO_DEV_ANY_ID },
 	{ 0 },
 };
+
+#ifdef CONFIG_KVM_FREE_PAGE_HINTING
+static bool virtqueue_kick_sync(struct virtqueue *vq)
+{
+	u32 len;
+
+	if (likely(virtqueue_kick(vq))) {
+		while (!virtqueue_get_buf(vq, &len) &&
+		       !virtqueue_is_broken(vq))
+			cpu_relax();
+		return true;
+	}
+	return false;
+}
+
+void virtballoon_page_hinting(void *vb_obj, void *hinting_req, int entries)
+{
+	struct virtio_balloon *vb = vb_obj;
+	struct scatterlist sg;
+	struct virtqueue *vq = vb->hinting_vq;
+	int err = 0;
+	struct virtio_balloon_hint_req *hint_req;
+	u64 gpaddr;
+
+	hint_req = kmalloc(sizeof(*hint_req), GFP_KERNEL);
+	if (!hint_req)
+		return;
+	gpaddr = virt_to_phys(hinting_req);
+	hint_req->phys_addr = cpu_to_virtio64(vb->vdev, gpaddr);
+	hint_req->count = cpu_to_virtio32(vb->vdev, entries);
+	sg_init_one(&sg, hint_req, sizeof(struct virtio_balloon_hint_req));
+	err = virtqueue_add_outbuf(vq, &sg, 1, hint_req, GFP_KERNEL);
+	if (!err)
+		virtqueue_kick_sync(vb->hinting_vq);
+
+	kfree(hint_req);
+}
+#endif
 
 static u32 page_to_balloon_pfn(struct page *page)
 {
@@ -489,6 +529,7 @@ static int init_vqs(struct virtio_balloon *vb)
 	names[VIRTIO_BALLOON_VQ_DEFLATE] = "deflate";
 	names[VIRTIO_BALLOON_VQ_STATS] = NULL;
 	names[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
+	names[VIRTIO_BALLOON_VQ_HINTING] = NULL;
 
 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_STATS_VQ)) {
 		names[VIRTIO_BALLOON_VQ_STATS] = "stats";
@@ -500,10 +541,17 @@ static int init_vqs(struct virtio_balloon *vb)
 		callbacks[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
 	}
 
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING)) {
+		names[VIRTIO_BALLOON_VQ_HINTING] = "hinting_vq";
+		callbacks[VIRTIO_BALLOON_VQ_HINTING] = NULL;
+	}
 	err = vb->vdev->config->find_vqs(vb->vdev, VIRTIO_BALLOON_VQ_MAX,
 					 vqs, callbacks, names, NULL, NULL);
 	if (err)
 		return err;
+
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING))
+		vb->hinting_vq = vqs[VIRTIO_BALLOON_VQ_HINTING];
 
 	vb->inflate_vq = vqs[VIRTIO_BALLOON_VQ_INFLATE];
 	vb->deflate_vq = vqs[VIRTIO_BALLOON_VQ_DEFLATE];
@@ -946,7 +994,7 @@ static int virtballoon_probe(struct virtio_device *vdev)
 
 #ifdef CONFIG_KVM_FREE_PAGE_HINTING
 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING))
-		guest_free_page_hinting_enable();
+		guest_free_page_hinting_enable(vb, virtballoon_page_hinting);
 #endif
 	virtio_device_ready(vdev);
 
@@ -1053,6 +1101,7 @@ static unsigned int features[] = {
 	VIRTIO_BALLOON_F_MUST_TELL_HOST,
 	VIRTIO_BALLOON_F_STATS_VQ,
 	VIRTIO_BALLOON_F_DEFLATE_ON_OOM,
+	VIRTIO_BALLOON_F_HINTING,
 	VIRTIO_BALLOON_F_FREE_PAGE_HINT,
 	VIRTIO_BALLOON_F_PAGE_POISON,
 	VIRTIO_BALLOON_F_HINTING,
