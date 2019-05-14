@@ -50,6 +50,39 @@ extern bool page_hinting_flag;
 void *vb_obj;
 void (*request_hypercall)(void *vb_obj, void *hinting_req, int entries);
 
+unsigned long freed, captured, buddy_captured, scanned, isolated, returned,
+	      reported;
+int sys_init_cnt;
+
+#ifdef CONFIG_SYSFS
+#define HINTING_ATTR_RO(_name) \
+		static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
+
+static ssize_t hinting_memory_stats_show(struct kobject *kobj,
+					 struct kobj_attribute *attr,
+					 char *buf)
+{
+	return sprintf(buf, "Freed memory:%lu KB\nCaptured memory:%lu KB\n"
+		       "Buddy captured memory:%lu KB\n"
+		       "Scanned memory:%lu KB\nIsolated memory:%lu KB\n"
+		       "Reported memory:%lu KB\nReturned memory:%lu KB\n",
+		       freed, captured, buddy_captured, scanned, isolated,
+		       reported, returned);
+}
+
+HINTING_ATTR_RO(hinting_memory_stats);
+
+static struct attribute *hinting_attrs[] = {
+	&hinting_memory_stats_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group hinting_attr_group = {
+	.attrs = hinting_attrs,
+	.name = "hinting",
+};
+#endif
+
 void page_hinting_enable(void *vb, void (*vb_callback)(void *, void *, int))
 {
 	struct zone *zone;
@@ -120,6 +153,7 @@ void release_buddy_pages(void *hinting_req, int entries)
 		mt = get_pageblock_migratetype(page);
 		__free_one_page(page, page_to_pfn(page), zone, order, mt);
 		bitmap_clear(bm_zone[zonenum].bitmap, bitmap_no, 1);
+		returned += (1 << order) * 4;
 		spin_unlock_irqrestore(&zone->lock, flags);
 		i++;
 	}
@@ -128,6 +162,7 @@ void release_buddy_pages(void *hinting_req, int entries)
 void page_hinting_report(struct guest_isolated_pages *isolated_pages_obj,
 			 int entries)
 {
+	reported += (1 << PAGE_HINTING_MIN_ORDER) * entries * 4;
 	if (vb_obj)
 		request_hypercall(vb_obj, isolated_pages_obj,
 				  entries);
@@ -169,6 +204,7 @@ static void scan_hinting_bitmap(int zonenum)
 		page = pfn_to_page((set_bit << PAGE_HINTING_MIN_ORDER) +
 				bm_zone[zonenum].base_pfn);
 		zone = page_zone(page);
+		scanned += (1 << page_private(page)) * 4;
 		atomic_dec(&bm_zone[zonenum].free_mem_cnt);
 		spin_lock_irqsave(&zone->lock, flags);
 
@@ -184,6 +220,7 @@ static void scan_hinting_bitmap(int zonenum)
 				len = (1 << buddy_order) * 4;
 				isolated_pages_obj[isolated_idx].len =
 					((uint64_t)buddy_order << 32) | len;
+				isolated += (1 << buddy_order) * 4;
 				isolated_idx += 1;
 			}
 		}
@@ -232,6 +269,14 @@ void init_hinting_wq(struct work_struct *work)
 {
 	int zonenum = 0;
 
+	if (sys_init_cnt == 0) {
+		int err = sysfs_create_group(mm_kobj, &hinting_attr_group);
+
+		if (err)
+			pr_err("hinting: register sysfs failed\n");
+		sys_init_cnt = 1;
+	}
+
 	while (zonenum < MAX_NR_ZONES) {
 		if (atomic_read(&bm_zone[zonenum].free_mem_cnt) >=
 		    HINTING_MEM_THRESHOLD) {
@@ -248,14 +293,18 @@ void page_hinting_enqueue(struct page *page, int order)
 	if (!page_hinting_flag)
 		return;
 	trace_guest_free_page(page_to_pfn(page), order);
+	freed += (1 << order) * 4;
 	if (PageBuddy(page) && order >= PAGE_HINTING_MIN_ORDER) {
+		captured += (1 << order) * 4;
 		bm_set_pfn(page);
 	} else {
 		struct page *buddy_page = get_buddy_page(page);
 
 		if (buddy_page && page_private(buddy_page) >=
-		    PAGE_HINTING_MIN_ORDER)
+		    PAGE_HINTING_MIN_ORDER) {
+			buddy_captured += (1 << page_private(buddy_page)) * 4;
 			bm_set_pfn(buddy_page);
+		}
 	}
 	if (check_hinting_threshold())
 		queue_work(system_wq, &hinting_work);
