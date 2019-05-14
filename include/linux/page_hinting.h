@@ -10,7 +10,7 @@
 #define PAGE_HINTING_MIN_ORDER		(MAX_ORDER - 1)
 
 void page_hinting_enqueue(struct page *page, int order);
-void page_hinting_enable(void);
+void page_hinting_enable(void *vb, void (*vb_callback)(void*, void*, int));
 void page_hinting_disable(void);
 extern int __isolate_free_page(struct page *page, unsigned int order);
 extern void __free_one_page(struct page *page, unsigned long pfn,

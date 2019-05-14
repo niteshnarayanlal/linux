@@ -45,8 +45,11 @@ struct guest_isolated_pages {
 
 struct work_struct hinting_work;
 void init_hinting_wq(struct work_struct *work);
+extern bool page_hinting_flag;
+void *vb_obj;
+void (*request_hypercall)(void *vb_obj, void *hinting_req, int entries);
 
-void page_hinting_enable(void)
+void page_hinting_enable(void *vb, void (*vb_callback)(void *, void *, int))
 {
 	struct zone *zone;
 	int idx = 0;
@@ -61,6 +64,9 @@ void page_hinting_enable(void)
 		bm_zone[idx].base_pfn = zone->zone_start_pfn;
 		idx++;
 	}
+	vb_obj = vb;
+	request_hypercall = vb_callback;
+	page_hinting_flag = true;
 	INIT_WORK(&hinting_work, init_hinting_wq);
 }
 EXPORT_SYMBOL_GPL(page_hinting_enable);
@@ -71,8 +77,10 @@ void page_hinting_disable(void)
 	int idx = 0;
 
 	cancel_work_sync(&hinting_work);
+	page_hinting_flag = false;
 	for_each_zone(zone)
 		kfree(bm_zone[idx++].bitmap);
+	vb_obj = NULL;
 }
 EXPORT_SYMBOL_GPL(page_hinting_disable);
 
@@ -119,6 +127,9 @@ void release_buddy_pages(void *hinting_req, int entries)
 void page_hinting_report(struct guest_isolated_pages *isolated_pages_obj,
 			 int entries)
 {
+	if (vb_obj)
+		request_hypercall(vb_obj, isolated_pages_obj,
+				  entries);
 	release_buddy_pages(isolated_pages_obj, entries);
 }
 
@@ -232,6 +243,8 @@ void init_hinting_wq(struct work_struct *work)
 
 void page_hinting_enqueue(struct page *page, int order)
 {
+	if (!page_hinting_flag)
+		return;
 	if (PageBuddy(page) && order >= PAGE_HINTING_MIN_ORDER) {
 		bm_set_pfn(page);
 	} else {
