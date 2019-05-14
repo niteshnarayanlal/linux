@@ -12,4 +12,8 @@
 void page_hinting_enqueue(struct page *page, int order);
 void page_hinting_enable(void);
 void page_hinting_disable(void);
+extern int __isolate_free_page(struct page *page, unsigned int order);
+extern void __free_one_page(struct page *page, unsigned long pfn,
+			    struct zone *zone, unsigned int order,
+			    int migratetype);
 #endif /* _LINUX_PAGE_HINTING_H */
