@@ -68,6 +68,7 @@
 #include <linux/lockdep.h>
 #include <linux/nmi.h>
 #include <linux/psi.h>
+#include <linux/page_hinting.h>
 
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
@@ -1263,6 +1264,7 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 			mt = get_pageblock_migratetype(page);
 
 		__free_one_page(page, page_to_pfn(page), zone, 0, mt);
+		page_hinting_enqueue(page, 0);
 		trace_mm_page_pcpu_drain(page, 0, mt);
 	}
 	spin_unlock(&zone->lock);
@@ -1279,6 +1281,7 @@ static void free_one_page(struct zone *zone,
 		migratetype = get_pfnblock_migratetype(page, pfn);
 	}
 	__free_one_page(page, pfn, zone, order, migratetype);
+	page_hinting_enqueue(page, order);
 	spin_unlock(&zone->lock);
 }
 
