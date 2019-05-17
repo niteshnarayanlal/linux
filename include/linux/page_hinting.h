@@ -10,6 +10,6 @@
 #define PAGE_HINTING_MIN_ORDER		(MAX_ORDER - 1)
 
 void page_hinting_enqueue(struct page *page, int order);
-void page_hinting_enable(void);
+void page_hinting_enable(void *vb, void (*vb_callback)(void*, void*, int));
 void page_hinting_disable(void);
 #endif /* _LINUX_PAGE_HINTING_H */
