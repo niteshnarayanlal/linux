@@ -32,6 +32,10 @@ struct hinting_bitmap {
 } bm_zone[MAX_NR_ZONES];
 
 static void init_hinting_wq(struct work_struct *work);
+extern int __isolate_free_page(struct page *page, unsigned int order);
+extern void __free_one_page(struct page *page, unsigned long pfn,
+			    struct zone *zone, unsigned int order,
+			    int migratetype, bool hint);
 struct hinting_cb *hcb;
 struct work_struct hinting_work;
 
@@ -94,6 +98,31 @@ static unsigned long pfn_to_bit(struct page *page, int zonenum)
 	return bitnr;
 }
 
+void release_buddy_pages(u64 phys_addr, u32 len)
+{
+	int mt = 0, zonenum;
+	struct page *page;
+	struct zone *zone;
+	unsigned long bitnr, pfn;
+	u32 order;
+
+	pfn = phys_addr >> PAGE_SHIFT;
+	page = pfn_to_online_page(pfn);
+	if (!page)
+		return;
+	zonenum = page_zonenum(page);
+	zone = page_zone(page);
+	bitnr = pfn_to_bit(page, zonenum);
+	order = ilog2(len / PAGE_SIZE);
+
+	spin_lock(&zone->lock);
+	mt = get_pageblock_migratetype(page);
+	__free_one_page(page, page_to_pfn(page), zone, order, mt,
+			false);
+	spin_unlock(&zone->lock);
+}
+EXPORT_SYMBOL_GPL(release_buddy_pages);
+
 static void bm_set_pfn(struct page *page)
 {
 	unsigned long bitnr = 0;
@@ -108,8 +137,50 @@ static void bm_set_pfn(struct page *page)
 		atomic_inc(&bm_zone[zonenum].free_mem_cnt);
 }
 
-static void scan_hinting_bitmap(int zonenum)
+static void scan_hinting_bitmap(int zonenum, int free_mem_cnt)
 {
+	unsigned long set_bit, start = 0;
+	struct page *page;
+	struct zone *zone;
+	int scan_cnt = 0, ret = 0, order;
+	u32 len;
+	u64 phys_addr;
+
+	ret = hcb->prepare();
+	if (!ret)
+		return;
+	for (;;) {
+		ret = 0;
+		set_bit = find_next_bit(bm_zone[zonenum].bitmap,
+					bm_zone[zonenum].nbits, start);
+		if (set_bit >= bm_zone[zonenum].nbits)
+			break;
+		page = pfn_to_online_page((set_bit << PAGE_HINTING_MIN_ORDER) +
+				bm_zone[zonenum].base_pfn);
+		if (!page)
+			continue;
+		zone = page_zone(page);
+		spin_lock(&zone->lock);
+
+		if (PageBuddy(page) && page_private(page) >=
+		    PAGE_HINTING_MIN_ORDER) {
+			order = page_private(page);
+			ret = __isolate_free_page(page, order);
+		}
+		clear_bit(set_bit, bm_zone[zonenum].bitmap);
+		spin_unlock(&zone->lock);
+		if (ret) {
+			phys_addr = page_to_pfn(page) << PAGE_SHIFT;
+			len = (1 << order) * PAGE_SIZE;
+			hcb->hint_page(phys_addr, len);
+		}
+		start = set_bit + 1;
+		scan_cnt++;
+	}
+	hcb->cleanup();
+	if (scan_cnt > free_mem_cnt)
+		atomic_sub((scan_cnt - free_mem_cnt),
+			   &bm_zone[zonenum].free_mem_cnt);
 }
 
 static bool check_hinting_threshold(void)
@@ -126,12 +197,18 @@ static bool check_hinting_threshold(void)
 
 static void init_hinting_wq(struct work_struct *work)
 {
-	int zonenum = 0;
+	int zonenum = 0, free_mem_cnt = 0;
 
 	for (; zonenum < MAX_NR_ZONES; zonenum++) {
-		if (atomic_read(&bm_zone[zonenum].free_mem_cnt) >=
-		    HINTING_MEM_THRESHOLD)
-			scan_hinting_bitmap(zonenum);
+		free_mem_cnt = atomic_read(&bm_zone[zonenum].free_mem_cnt);
+		if (free_mem_cnt >= HINTING_MEM_THRESHOLD) {
+			/* Find a better way to synchronize per zone
+			 * free_mem_cnt.
+			 */
+			atomic_sub(free_mem_cnt,
+				   &bm_zone[zonenum].free_mem_cnt);
+			scan_hinting_bitmap(zonenum, free_mem_cnt);
+		}
 	}
 }
 

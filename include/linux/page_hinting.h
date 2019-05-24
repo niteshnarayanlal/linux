@@ -36,4 +36,5 @@ void page_hinting_enqueue(struct page *page, int order)
 void page_hinting_enqueue(struct page *page, int order);
 void page_hinting_enable(struct hinting_cb *cb);
 void page_hinting_disable(void);
+void release_buddy_pages(u64 phys_addr, u32 len);
 #endif /* _LINUX_PAGE_HINTING_H */
