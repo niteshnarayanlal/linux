@@ -39,6 +39,37 @@ extern void __free_one_page(struct page *page, unsigned long pfn,
 struct hinting_cb *hcb;
 struct work_struct hinting_work;
 
+unsigned long freed, captured, scanned, isolated, returned, reported;
+int sys_init_cnt;
+
+#ifdef CONFIG_SYSFS
+#define HINTING_ATTR_RO(_name) \
+		static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
+
+static ssize_t hinting_memory_stats_show(struct kobject *kobj,
+					 struct kobj_attribute *attr,
+					 char *buf)
+{
+	return sprintf(buf, "Freed memory:%lu KB\nCaptured memory:%lu KB\n"
+		       "Scanned memory:%lu KB\nIsolated memory:%lu KB\n"
+		       "Reported memory:%lu KB\nReturned memory:%lu KB\n",
+		       freed, captured, scanned, isolated,
+		       reported, returned);
+}
+
+HINTING_ATTR_RO(hinting_memory_stats);
+
+static struct attribute *hinting_attrs[] = {
+	&hinting_memory_stats_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group hinting_attr_group = {
+	.attrs = hinting_attrs,
+	.name = "hinting",
+};
+#endif
+
 static unsigned long find_bitmap_size(struct zone *zone)
 {
 	unsigned long nbits = ALIGN(zone->spanned_pages,
@@ -129,6 +160,7 @@ static void bm_set_pfn(struct page *page)
 	int zonenum = page_zonenum(page);
 	struct zone *zone = page_zone(page);
 
+	captured += (1 << page_private(page)) * 4;
 	lockdep_assert_held(&zone->lock);
 	bitnr = pfn_to_bit(page, zonenum);
 	if (bm_zone[zonenum].bitmap &&
@@ -160,6 +192,7 @@ static void scan_hinting_bitmap(int zonenum, int free_mem_cnt)
 		if (!page)
 			continue;
 		zone = page_zone(page);
+		scanned += (1 << page_private(page)) * 4;
 		spin_lock(&zone->lock);
 
 		if (PageBuddy(page) && page_private(page) >=
@@ -170,6 +203,7 @@ static void scan_hinting_bitmap(int zonenum, int free_mem_cnt)
 		clear_bit(set_bit, bm_zone[zonenum].bitmap);
 		spin_unlock(&zone->lock);
 		if (ret) {
+			isolated += (1 << order) * 4;
 			phys_addr = page_to_pfn(page) << PAGE_SHIFT;
 			len = (1 << order) * PAGE_SIZE;
 			hcb->hint_page(phys_addr, len);
@@ -202,6 +236,15 @@ static void init_hinting_wq(struct work_struct *work)
 	for (; zonenum < MAX_NR_ZONES; zonenum++) {
 		free_mem_cnt = atomic_read(&bm_zone[zonenum].free_mem_cnt);
 		if (free_mem_cnt >= HINTING_MEM_THRESHOLD) {
+			if (sys_init_cnt == 0) {
+				int err = sysfs_create_group(mm_kobj,
+						&hinting_attr_group);
+
+				if (err)
+					pr_err("hinting: register sysfs failed\n");
+				sys_init_cnt = 1;
+			}
+
 			/* Find a better way to synchronize per zone
 			 * free_mem_cnt.
 			 */
@@ -214,6 +257,7 @@ static void init_hinting_wq(struct work_struct *work)
 
 void page_hinting_enqueue(struct page *page, int order)
 {
+	freed += (1 << order) * 4;
 	if (hcb && order >= PAGE_HINTING_MIN_ORDER)
 		bm_set_pfn(page);
 	else
