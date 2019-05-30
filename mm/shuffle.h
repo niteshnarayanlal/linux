@@ -3,6 +3,7 @@
 #ifndef _MM_SHUFFLE_H
 #define _MM_SHUFFLE_H
 #include <linux/jump_label.h>
+#include <linux/random.h>
 
 /*
  * SHUFFLE_ENABLE is called from the command line enabling path, or by
@@ -43,6 +44,35 @@ static inline bool is_shuffle_order(int order)
 		return false;
 	return order >= SHUFFLE_ORDER;
 }
+
+static inline bool is_shuffle_tail_page(int order)
+{
+	static u64 rand;
+	static u8 rand_bits;
+	u64 rand_old;
+
+	if (!is_shuffle_order(order))
+		return false;
+
+	/*
+	 * The lack of locking is deliberate. If 2 threads race to
+	 * update the rand state it just adds to the entropy.
+	 */
+	if (rand_bits-- == 0) {
+		rand_bits = 64;
+		rand = get_random_u64();
+	}
+
+	/*
+	 * Test highest order bit while shifting our random value. This
+	 * should result in us testing for the carry flag following the
+	 * shift.
+	 */
+	rand_old = rand;
+	rand <<= 1;
+
+	return rand < rand_old;
+}
 #else
 static inline void shuffle_free_memory(pg_data_t *pgdat)
 {
@@ -57,6 +87,11 @@ static inline void page_alloc_shuffle(enum mm_shuffle_ctl ctl)
 }
 
 static inline bool is_shuffle_order(int order)
+{
+	return false;
+}
+
+static inline bool is_shuffle_tail_page(int order)
 {
 	return false;
 }
