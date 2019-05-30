@@ -137,6 +137,13 @@ add_to_free_area_treated(struct page *page, struct free_area *area,
 {
 	area->nr_free_treated++;
 
+#ifdef CONFIG_MEMORY_ISOLATION
+	/* Bypass membrane for isolated pages, all are considered "treated" */
+	if (migratetype == MIGRATE_ISOLATE) {
+		list_add(&page->lru, &area->free_list[migratetype]);
+		return;
+	}
+#endif
 	BUG_ON(area->treatment_mt != migratetype);
 
 	/* Insert page above membrane, then move membrane to the page */

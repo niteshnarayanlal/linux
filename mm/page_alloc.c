@@ -988,7 +988,7 @@ done_merging:
 	set_page_order(page, order);
 
 	area = &zone->free_area[order];
-	if (PageTreated(page)) {
+	if (is_migrate_isolate(migratetype) || PageTreated(page)) {
 		add_to_free_area_treated(page, area, migratetype);
 		return;
 	}

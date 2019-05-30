@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/memory_aeration.h>
+#include <linux/mm.h>
 #include <linux/mmzone.h>
+#include <linux/page-isolation.h>
 #include <linux/gfp.h>
 #include <linux/export.h>
 #include <linux/delay.h>
@@ -83,8 +85,10 @@ static int __aerator_fill(struct zone *zone, unsigned int size)
 			 * new raw pages can build. In the meantime move on
 			 * to the next migratetype.
 			 */
-			if (++mt >= MIGRATE_TYPES)
-				mt = 0;
+			do {
+				if (++mt >= MIGRATE_TYPES)
+					mt = 0;
+			} while (is_migrate_isolate(mt));
 
 			/*
 			 * Pull pages from free list until we have drained
