@@ -89,7 +89,8 @@ extern int page_group_by_mobility_disabled;
 
 struct free_area {
 	struct list_head	free_list[MIGRATE_TYPES];
-	unsigned long		nr_free;
+	unsigned long		nr_free_raw;
+	unsigned long		nr_free_treated;
 };
 
 /* Used for pages not on another list */
@@ -97,7 +98,7 @@ static inline void add_to_free_area(struct page *page, struct free_area *area,
 			     int migratetype)
 {
 	list_add(&page->lru, &area->free_list[migratetype]);
-	area->nr_free++;
+	area->nr_free_raw++;
 }
 
 /* Used for pages not on another list */
@@ -105,13 +106,31 @@ static inline void add_to_free_area_tail(struct page *page, struct free_area *ar
 				  int migratetype)
 {
 	list_add_tail(&page->lru, &area->free_list[migratetype]);
-	area->nr_free++;
+	area->nr_free_raw++;
 }
 
 /* Used for pages which are on another list */
 static inline void move_to_free_area(struct page *page, struct free_area *area,
 			     int migratetype)
 {
+	/*
+	 * Since we are moving the page out of one migrate type and into
+	 * another the page will be added to the head of the new list.
+	 *
+	 * To avoid creating an island of raw pages floating between two
+	 * sections of treated pages we should reset the page type and
+	 * just re-treat the page when we process the destination.
+	 *
+	 * No need to trigger a notification for this since the page itself
+	 * is actually treated and we are just doing this for logistical
+	 * reasons.
+	 */
+	if (PageTreated(page)) {
+		__ResetPageTreated(page);
+		area->nr_free_treated--;
+		area->nr_free_raw++;
+	}
+
 	list_move(&page->lru, &area->free_list[migratetype]);
 }
 
@@ -125,16 +144,25 @@ static inline struct page *get_page_from_free_area(struct free_area *area,
 static inline void del_page_from_free_area(struct page *page,
 		struct free_area *area)
 {
+	if (PageTreated(page))
+		area->nr_free_treated--;
+	else
+		area->nr_free_raw--;
+
 	list_del(&page->lru);
 	__ClearPageBuddy(page);
 	__ResetPageTreated(page);
 	set_page_private(page, 0);
-	area->nr_free--;
 }
 
 static inline bool free_area_empty(struct free_area *area, int migratetype)
 {
 	return list_empty(&area->free_list[migratetype]);
+}
+
+static inline unsigned long nr_pages_in_free_area(struct free_area *area)
+{
+	return area->nr_free_raw + area->nr_free_treated;
 }
 
 struct pglist_data;

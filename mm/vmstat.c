@@ -1030,7 +1030,7 @@ static void fill_contig_page_info(struct zone *zone,
 		unsigned long blocks;
 
 		/* Count number of free blocks */
-		blocks = zone->free_area[order].nr_free;
+		blocks = nr_pages_in_free_area(&zone->free_area[order]);
 		info->free_blocks_total += blocks;
 
 		/* Count free base pages */
@@ -1352,7 +1352,8 @@ static void frag_show_print(struct seq_file *m, pg_data_t *pgdat,
 
 	seq_printf(m, "Node %d, zone %8s ", pgdat->node_id, zone->name);
 	for (order = 0; order < MAX_ORDER; ++order)
-		seq_printf(m, "%6lu ", zone->free_area[order].nr_free);
+		seq_printf(m, "%6lu ",
+			   nr_pages_in_free_area(&zone->free_area[order]));
 	seq_putc(m, '\n');
 }
 

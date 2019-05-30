@@ -1318,7 +1318,7 @@ fast_isolate_freepages(struct compact_control *cc)
 		unsigned long flags;
 		unsigned int order_scanned = 0;
 
-		if (!area->nr_free)
+		if (!nr_pages_in_free_area(area))
 			continue;
 
 		spin_lock_irqsave(&cc->zone->lock, flags);
@@ -1674,7 +1674,7 @@ static unsigned long fast_find_migrateblock(struct compact_control *cc)
 		unsigned long flags;
 		struct page *freepage;
 
-		if (!area->nr_free)
+		if (!nr_pages_in_free_area(area))
 			continue;
 
 		spin_lock_irqsave(&cc->zone->lock, flags);

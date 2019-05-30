@@ -2417,7 +2417,7 @@ int find_suitable_fallback(struct free_area *area, unsigned int order,
 	int i;
 	int fallback_mt;
 
-	if (area->nr_free == 0)
+	if (!nr_pages_in_free_area(area))
 		return -1;
 
 	*can_steal = false;
@@ -3392,7 +3392,7 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 		struct free_area *area = &z->free_area[o];
 		int mt;
 
-		if (!area->nr_free)
+		if (!nr_pages_in_free_area(area))
 			continue;
 
 		for (mt = 0; mt < MIGRATE_PCPTYPES; mt++) {
@@ -5324,7 +5324,7 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			struct free_area *area = &zone->free_area[order];
 			int type;
 
-			nr[order] = area->nr_free;
+			nr[order] = nr_pages_in_free_area(area);
 			total += nr[order] << order;
 
 			types[order] = 0;
@@ -5935,9 +5935,13 @@ void __ref memmap_init_zone_device(struct zone *zone,
 static void __meminit zone_init_free_lists(struct zone *zone)
 {
 	unsigned int order, t;
-	for_each_migratetype_order(order, t) {
+
+	for_each_migratetype_order(order, t)
 		INIT_LIST_HEAD(&zone->free_area[order].free_list[t]);
-		zone->free_area[order].nr_free = 0;
+
+	for (order = MAX_ORDER; order--; ) {
+		zone->free_area[order].nr_free_raw = 0;
+		zone->free_area[order].nr_free_treated = 0;
 	}
 }
 
