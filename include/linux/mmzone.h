@@ -127,6 +127,7 @@ static inline void del_page_from_free_area(struct page *page,
 {
 	list_del(&page->lru);
 	__ClearPageBuddy(page);
+	__ResetPageTreated(page);
 	set_page_private(page, 0);
 	area->nr_free--;
 }

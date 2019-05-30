@@ -941,6 +941,11 @@ continue_merging:
 			goto done_merging;
 		if (!page_is_buddy(page, buddy, order))
 			goto done_merging;
+
+		/* If buddy is not treated, then do not mark page treated */
+		if (!PageTreated(buddy))
+			__ResetPageTreated(page);
+
 		/*
 		 * Our buddy is free or it is CONFIG_DEBUG_PAGEALLOC guard page,
 		 * merge with it and move up one order.

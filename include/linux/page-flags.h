@@ -722,10 +722,30 @@ static __always_inline void __SetPage##uname(struct page *page)		\
 	VM_BUG_ON_PAGE(!PageType(page, 0), page);			\
 	page->page_type &= ~PG_##lname;					\
 }									\
+static __always_inline void __ResetPage##uname(struct page *page)	\
+{									\
+	VM_BUG_ON_PAGE(!PageType(page, 0), page);			\
+	page->page_type |= PG_##lname;					\
+}									\
 static __always_inline void __ClearPage##uname(struct page *page)	\
 {									\
 	VM_BUG_ON_PAGE(!Page##uname(page), page);			\
 	page->page_type |= PG_##lname;					\
+}
+
+#define PAGE_TYPE_OPS_DISABLED(uname)					\
+static __always_inline int Page##uname(struct page *page)		\
+{									\
+	return false;							\
+}									\
+static __always_inline void __SetPage##uname(struct page *page)		\
+{									\
+}									\
+static __always_inline void __ResetPage##uname(struct page *page)	\
+{									\
+}									\
+static __always_inline void __ClearPage##uname(struct page *page)	\
+{									\
 }
 
 /*
@@ -742,6 +762,18 @@ PAGE_TYPE_OPS(Buddy, buddy)
  * be touched (read/write/dump/save) except by their owner.
  */
 PAGE_TYPE_OPS(Offline, offline)
+
+/*
+ * PageTreated() is an alias for Offline, however it is not meant to be an
+ * exclusive value. It should be combined with PageBuddy() when seen as it
+ * is meant to indicate that the page has been scrubbed while waiting in
+ * the buddy system.
+ */
+#ifdef CONFIG_AERATION
+PAGE_TYPE_OPS(Treated, offline)
+#else
+PAGE_TYPE_OPS_DISABLED(Treated)
+#endif
 
 /*
  * If kmemcg is enabled, the buddy allocator will set PageKmemcg() on
