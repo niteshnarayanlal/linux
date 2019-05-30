@@ -2154,6 +2154,113 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 	return NULL;
 }
 
+#ifdef CONFIG_AERATION
+static struct page *get_raw_page_from_free_area(struct free_area *area,
+						int migratetype)
+{
+	struct list_head *head = &area->free_list[migratetype];
+	struct page *page;
+
+	/* If we have not worked in this free_list before reset membrane */
+	if (area->treatment_mt != migratetype) {
+		area->treatment_mt = migratetype;
+		area->membrane = head;
+	}
+
+	/* Try to pulling in any untreated pages above the the membrane */
+	page = list_last_entry(area->membrane, struct page, lru);
+	list_for_each_entry_from_reverse(page, head, lru) {
+		/*
+		 * If the page in front of the membrane is treated then try
+		 * skimming the top to see if we have any untreated pages
+		 * up there.
+		 */
+		if (PageTreated(page)) {
+			page = list_first_entry(head, struct page, lru);
+			if (PageTreated(page))
+				break;
+		}
+
+		/* update state of treatment */
+		area->treatment_state = TREATMENT_AERATING;
+
+		return page;
+	}
+
+	/*
+	 * At this point there are no longer any untreated pages between
+	 * the membrane and the first entry of the list. So we can safely
+	 * set the membrane to the top of the treated region and will mark
+	 * the current migratetype as complete for now.
+	 */
+	area->membrane = &page->lru;
+	area->treatment_state = TREATMENT_SETTLING;
+
+	return NULL;
+}
+
+/**
+ * get_raw_pages - Provide a "raw" page for treatment by the aerator
+ * @zone: Zone to draw pages from
+ * @order: Order to draw pages from
+ * @migratetype: Migratetype to draw pages from
+ *
+ * This function will obtain a page that does not have the Treated value
+ * set in the page type field. It will attempt to fetch a "raw" page from
+ * just above the "membrane" and if that is not available it will attempt
+ * to pull a "raw" page from the head of the free list.
+ *
+ * The page will have the migrate type and order stored in the page
+ * metadata.
+ *
+ * Return: page pointer if raw page found, otherwise NULL
+ */
+struct page *get_raw_pages(struct zone *zone, unsigned int order,
+			   int migratetype)
+{
+	struct free_area *area = &(zone->free_area[order]);
+	struct page *page;
+
+	/* Find a page of the appropriate size in the preferred list */
+	page = get_raw_page_from_free_area(area, migratetype);
+	if (page) {
+		del_page_from_free_area(page, area);
+
+		/* record migratetype and order within page */
+		set_pcppage_migratetype(page, migratetype);
+		set_page_private(page, order);
+		__mod_zone_freepage_state(zone, -(1 << order), migratetype);
+	}
+
+	return page;
+}
+EXPORT_SYMBOL_GPL(get_raw_pages);
+
+/**
+ * free_treated_page - Return a now-treated "raw" page back where we got it
+ * @page: Previously "raw" page that can now be returned after treatment
+ *
+ * This function will pull the zone, migratetype, and order information out
+ * of the page and attempt to return it where it found it. We default to
+ * using free_one_page to return the page as it is possible that the
+ * pageblock might have been switched to an isolate migratetype during
+ * treatment.
+ */
+void free_treated_page(struct page *page)
+{
+	unsigned int order, mt;
+	struct zone *zone;
+
+	zone = page_zone(page);
+	mt = get_pcppage_migratetype(page);
+	order = page_private(page);
+
+	set_page_private(page, 0);
+
+	free_one_page(zone, page, page_to_pfn(page), order, mt);
+}
+EXPORT_SYMBOL_GPL(free_treated_page);
+#endif /* CONFIG_AERATION */
 
 /*
  * This array describes the order lists are fallen back to when
