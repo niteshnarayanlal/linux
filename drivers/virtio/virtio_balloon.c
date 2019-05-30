@@ -31,6 +31,7 @@
 #include <linux/mm.h>
 #include <linux/mount.h>
 #include <linux/magic.h>
+#include <linux/memory_aeration.h>
 
 /*
  * Balloon device works in 4K page units.  So each page is pointed to by
@@ -58,6 +59,7 @@ enum virtio_balloon_vq {
 	VIRTIO_BALLOON_VQ_DEFLATE,
 	VIRTIO_BALLOON_VQ_STATS,
 	VIRTIO_BALLOON_VQ_FREE_PAGE,
+	VIRTIO_BALLOON_VQ_HINTING,
 	VIRTIO_BALLOON_VQ_MAX
 };
 
@@ -65,9 +67,16 @@ enum virtio_balloon_config_read {
 	VIRTIO_BALLOON_CONFIG_READ_CMD_ID = 0,
 };
 
+#define VIRTIO_BUBBLE_ARRAY_HINTS_MAX	32
+struct virtio_bubble_page_hint {
+	__virtio32 pfn;
+	__virtio32 size;
+};
+
 struct virtio_balloon {
 	struct virtio_device *vdev;
-	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *free_page_vq;
+	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *free_page_vq,
+								*hinting_vq;
 
 	/* Balloon's own wq for cpu-intensive work items */
 	struct workqueue_struct *balloon_wq;
@@ -120,6 +129,11 @@ struct virtio_balloon {
 	unsigned int num_pfns;
 	__virtio32 pfns[VIRTIO_BALLOON_ARRAY_PFNS_MAX];
 
+	/* The array of PFNs we are hinting on */
+	unsigned int num_hints;
+	struct virtio_bubble_page_hint hints[VIRTIO_BUBBLE_ARRAY_HINTS_MAX];
+	struct aerator_dev_info a_dev_info;
+
 	/* Memory statistics */
 	struct virtio_balloon_stat stats[VIRTIO_BALLOON_S_NR];
 
@@ -162,6 +176,54 @@ static void tell_host(struct virtio_balloon *vb, struct virtqueue *vq)
 	/* When host has read buffer, this completes via balloon_ack */
 	wait_event(vb->acked, virtqueue_get_buf(vq, &len));
 
+}
+
+void virtballoon_aerator_react(struct aerator_dev_info *a_dev_info)
+{
+	struct virtio_balloon *vb = container_of(a_dev_info,
+						struct virtio_balloon,
+						a_dev_info);
+	struct virtqueue *vq = vb->hinting_vq;
+	struct scatterlist sg;
+	unsigned int unused;
+	struct page *page;
+
+	vb->num_hints = 0;
+
+	list_for_each_entry(page, &a_dev_info->batch_reactor, lru) {
+		struct virtio_bubble_page_hint *hint;
+		unsigned int size;
+
+		hint = &vb->hints[vb->num_hints++];
+		hint->pfn = cpu_to_virtio32(vb->vdev,
+					    page_to_balloon_pfn(page));
+		size = VIRTIO_BALLOON_PAGES_PER_PAGE << page_private(page);
+		hint->size = cpu_to_virtio32(vb->vdev, size);
+	}
+
+	/* We shouldn't have been called if there is nothing to process */
+	if (WARN_ON(vb->num_hints == 0))
+		return;
+
+	/* Detach all the used buffers from the vq */
+	while (virtqueue_get_buf(vq, &unused))
+		;
+
+	sg_init_one(&sg, vb->hints,
+		    sizeof(vb->hints[0]) * vb->num_hints);
+
+	/*
+	 * We should always be able to add one buffer to an
+	 * empty queue.
+	 */
+	virtqueue_add_outbuf(vq, &sg, 1, vb, GFP_KERNEL);
+	virtqueue_kick(vq);
+}
+
+static void aerator_settled(struct virtqueue *vq)
+{
+	/* Drain the current aerator contents, refill, and start next cycle */
+	aerator_cycle();
 }
 
 static void set_page_pfns(struct virtio_balloon *vb,
@@ -488,6 +550,7 @@ static int init_vqs(struct virtio_balloon *vb)
 	names[VIRTIO_BALLOON_VQ_DEFLATE] = "deflate";
 	names[VIRTIO_BALLOON_VQ_STATS] = NULL;
 	names[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
+	names[VIRTIO_BALLOON_VQ_HINTING] = NULL;
 
 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_STATS_VQ)) {
 		names[VIRTIO_BALLOON_VQ_STATS] = "stats";
@@ -499,10 +562,18 @@ static int init_vqs(struct virtio_balloon *vb)
 		callbacks[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
 	}
 
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING)) {
+		names[VIRTIO_BALLOON_VQ_HINTING] = "hinting_vq";
+		callbacks[VIRTIO_BALLOON_VQ_HINTING] = aerator_settled;
+	}
+
 	err = vb->vdev->config->find_vqs(vb->vdev, VIRTIO_BALLOON_VQ_MAX,
 					 vqs, callbacks, names, NULL, NULL);
 	if (err)
 		return err;
+
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING))
+		vb->hinting_vq = vqs[VIRTIO_BALLOON_VQ_HINTING];
 
 	vb->inflate_vq = vqs[VIRTIO_BALLOON_VQ_INFLATE];
 	vb->deflate_vq = vqs[VIRTIO_BALLOON_VQ_DEFLATE];
@@ -942,12 +1013,25 @@ static int virtballoon_probe(struct virtio_device *vdev)
 		if (err)
 			goto out_del_balloon_wq;
 	}
+
+	vb->a_dev_info.react = virtballoon_aerator_react;
+	vb->a_dev_info.capacity = VIRTIO_BUBBLE_ARRAY_HINTS_MAX;
+	INIT_LIST_HEAD(&vb->a_dev_info.batch_reactor);
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING)) {
+		err = aerator_startup(&vb->a_dev_info);
+		if (err)
+			goto out_unregister_shrinker;
+	}
+
 	virtio_device_ready(vdev);
 
 	if (towards_target(vb))
 		virtballoon_changed(vdev);
 	return 0;
 
+out_unregister_shrinker:
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_DEFLATE_ON_OOM))
+		virtio_balloon_unregister_shrinker(vb);
 out_del_balloon_wq:
 	if (virtio_has_feature(vdev, VIRTIO_BALLOON_F_FREE_PAGE_HINT))
 		destroy_workqueue(vb->balloon_wq);
@@ -976,6 +1060,8 @@ static void virtballoon_remove(struct virtio_device *vdev)
 {
 	struct virtio_balloon *vb = vdev->priv;
 
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING))
+		aerator_shutdown();
 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_DEFLATE_ON_OOM))
 		virtio_balloon_unregister_shrinker(vb);
 	spin_lock_irq(&vb->stop_update_lock);
@@ -1045,6 +1131,7 @@ static unsigned int features[] = {
 	VIRTIO_BALLOON_F_DEFLATE_ON_OOM,
 	VIRTIO_BALLOON_F_FREE_PAGE_HINT,
 	VIRTIO_BALLOON_F_PAGE_POISON,
+	VIRTIO_BALLOON_F_HINTING,
 };
 
 static struct virtio_driver virtio_balloon_driver = {
