@@ -988,6 +988,11 @@ done_merging:
 	set_page_order(page, order);
 
 	area = &zone->free_area[order];
+	if (PageTreated(page)) {
+		add_to_free_area_treated(page, area, migratetype);
+		return;
+	}
+
 	if (buddy_merge_likely(pfn, buddy_pfn, page, order) ||
 	    is_shuffle_tail_page(order))
 		add_to_free_area_tail(page, area, migratetype);
@@ -5952,8 +5957,13 @@ static void __meminit zone_init_free_lists(struct zone *zone)
 		INIT_LIST_HEAD(&zone->free_area[order].free_list[t]);
 
 	for (order = MAX_ORDER; order--; ) {
-		zone->free_area[order].nr_free_raw = 0;
-		zone->free_area[order].nr_free_treated = 0;
+		struct free_area *area = &zone->free_area[order];
+
+		area->nr_free_raw = 0;
+		area->nr_free_treated = 0;
+		area->treatment_mt = 0;
+		area->treatment_state = TREATMENT_SETTLING;
+		area->membrane = &area->free_list[0];
 	}
 }
 

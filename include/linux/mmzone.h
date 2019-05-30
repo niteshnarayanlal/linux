@@ -87,10 +87,28 @@ extern int page_group_by_mobility_disabled;
 	get_pfnblock_flags_mask(page, page_to_pfn(page),		\
 			PB_migrate_end, MIGRATETYPE_MASK)
 
+/*
+ * The treatment state indicates the current state of the region pointed to
+ * by the treatment_mt and the membrane pointer. The general idea is that
+ * when we are in the "SETTLING" state the treatment area is contiguous and
+ * it is safe to move on to treating another migratetype. If we are in the
+ * "AERATING" state then the region is being actively processed and we
+ * would cause issues such as potentially isolating a section of raw pages
+ * between two sections of treated pages if we were to move onto another
+ * migratetype.
+ */
+enum treatment_state {
+	TREATMENT_SETTLING,
+	TREATMENT_AERATING,
+};
+
 struct free_area {
 	struct list_head	free_list[MIGRATE_TYPES];
 	unsigned long		nr_free_raw;
 	unsigned long		nr_free_treated;
+	struct list_head	*membrane;
+	u8			treatment_mt;
+	u8			treatment_state;
 };
 
 /* Used for pages not on another list */
@@ -111,6 +129,19 @@ static inline void add_to_free_area_tail(struct page *page, struct free_area *ar
 {
 	area->nr_free_raw++;
 	list_add_tail(&page->lru, &area->free_list[migratetype]);
+}
+
+static inline void
+add_to_free_area_treated(struct page *page, struct free_area *area,
+			 int migratetype)
+{
+	area->nr_free_treated++;
+
+	BUG_ON(area->treatment_mt != migratetype);
+
+	/* Insert page above membrane, then move membrane to the page */
+	list_add_tail(&page->lru, area->membrane);
+	area->membrane = &page->lru;
 }
 
 /* Used for pages which are on another list */
@@ -135,6 +166,10 @@ static inline void move_to_free_area(struct page *page, struct free_area *area,
 		area->nr_free_raw++;
 	}
 
+	/* push membrane back if we removed the upper boundary */
+	if (area->membrane == &page->lru)
+		area->membrane = page->lru.next;
+
 	list_move(&page->lru, &area->free_list[migratetype]);
 }
 
@@ -152,6 +187,9 @@ static inline void del_page_from_free_area(struct page *page,
 		area->nr_free_treated--;
 	else
 		area->nr_free_raw--;
+
+	if (area->membrane == &page->lru)
+		area->membrane = page->lru.next;
 
 	list_del(&page->lru);
 	__ClearPageBuddy(page);
