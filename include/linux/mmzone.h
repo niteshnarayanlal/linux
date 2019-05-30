@@ -97,16 +97,20 @@ struct free_area {
 static inline void add_to_free_area(struct page *page, struct free_area *area,
 			     int migratetype)
 {
+	if (PageTreated(page))
+		area->nr_free_treated++;
+	else
+		area->nr_free_raw++;
+
 	list_add(&page->lru, &area->free_list[migratetype]);
-	area->nr_free_raw++;
 }
 
 /* Used for pages not on another list */
 static inline void add_to_free_area_tail(struct page *page, struct free_area *area,
 				  int migratetype)
 {
-	list_add_tail(&page->lru, &area->free_list[migratetype]);
 	area->nr_free_raw++;
+	list_add_tail(&page->lru, &area->free_list[migratetype]);
 }
 
 /* Used for pages which are on another list */

@@ -1964,7 +1964,7 @@ void __init init_cma_reserved_pageblock(struct page *page)
  */
 static inline void expand(struct zone *zone, struct page *page,
 	int low, int high, struct free_area *area,
-	int migratetype)
+	int migratetype, bool treated)
 {
 	unsigned long size = 1 << high;
 
@@ -1983,8 +1983,17 @@ static inline void expand(struct zone *zone, struct page *page,
 		if (set_page_guard(zone, &page[size], high, migratetype))
 			continue;
 
-		add_to_free_area(&page[size], area, migratetype);
 		set_page_order(&page[size], high);
+		if (treated)
+			__SetPageTreated(&page[size]);
+
+		/*
+		 * The list we are placing this page in should be empty
+		 * so it should be safe to place it here without worrying
+		 * about creating a block of raw pages floating in between
+		 * two blocks of treated pages.
+		 */
+		add_to_free_area(&page[size], area, migratetype);
 	}
 }
 
@@ -2121,6 +2130,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 	unsigned int current_order;
 	struct free_area *area;
 	struct page *page;
+	bool treated;
 
 	/* Find a page of the appropriate size in the preferred list */
 	for (current_order = order; current_order < MAX_ORDER; ++current_order) {
@@ -2128,8 +2138,10 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 		page = get_page_from_free_area(area, migratetype);
 		if (!page)
 			continue;
+		treated = PageTreated(page);
 		del_page_from_free_area(page, area);
-		expand(zone, page, order, current_order, area, migratetype);
+		expand(zone, page, order, current_order, area, migratetype,
+		       treated);
 		set_pcppage_migratetype(page, migratetype);
 		return page;
 	}
