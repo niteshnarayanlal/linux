@@ -998,6 +998,8 @@ done_merging:
 		add_to_free_area_tail(page, area, migratetype);
 	else
 		add_to_free_area(page, area, migratetype);
+
+	arch_free_page_notify(page, zone, order);
 }
 
 /*

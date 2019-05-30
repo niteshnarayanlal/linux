@@ -18,6 +18,17 @@
 
 struct page;
 
+#ifdef CONFIG_AERATION
+#include <linux/memory_aeration.h>
+
+#define HAVE_ARCH_FREE_PAGE_NOTIFY
+static inline void
+arch_free_page_notify(struct page *page, struct zone *zone, int order)
+{
+	aerator_notify_free(page, zone, order);
+}
+
+#endif
 #include <linux/range.h>
 extern struct range pfn_mapped[];
 extern int nr_pfn_mapped;
