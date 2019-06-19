@@ -554,6 +554,14 @@ enum zone_flags {
 	ZONE_BOOSTED_WATERMARK,		/* zone recently boosted watermarks.
 					 * Cleared when kswapd is woken.
 					 */
+	ZONE_AERATION_REQUESTED,	/* zone enabled aeration and is
+					 * requesting scrubbing the data out of
+					 * higher order pages.
+					 */
+	ZONE_AERATION_ACTIVE,		/* zone enabled aeration and is
+					 * activly cleaning the data out of
+					 * higher order pages.
+					 */
 };
 
 static inline unsigned long zone_managed_pages(struct zone *zone)

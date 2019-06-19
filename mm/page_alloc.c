@@ -2152,8 +2152,10 @@ struct page *get_aeration_page(struct zone *zone, unsigned int order,
 	list_for_each_entry_from_reverse(page, list, lru) {
 		if (PageAerated(page)) {
 			page = list_first_entry(list, struct page, lru);
-			if (PageAerated(page))
+			if (PageAerated(page)) {
+				aerator_add_to_boundary(page, zone);
 				break;
+			}
 		}
 
 		del_page_from_free_area(page, zone, order);
