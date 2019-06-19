@@ -236,6 +236,11 @@ config COMPACTION
           linux-mm@kvack.org.
 
 #
+# support for memory aeration
+config AERATION
+	bool
+
+#
 # support for page migration
 #
 config MIGRATION

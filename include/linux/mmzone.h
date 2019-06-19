@@ -116,6 +116,7 @@ static inline void set_pcppage_migratetype(struct page *page, int migratetype)
 struct free_area {
 	struct list_head	free_list[MIGRATE_TYPES];
 	unsigned long		nr_free;
+	unsigned long		nr_free_aerated;
 };
 
 static inline struct page *get_page_from_free_area(struct free_area *area,
@@ -773,6 +774,8 @@ static inline bool pgdat_is_empty(pg_data_t *pgdat)
 	return !pgdat->node_start_pfn && !pgdat->node_spanned_pages;
 }
 
+#include <linux/memory_aeration.h>
+
 /* Used for pages not on another list */
 static inline void add_to_free_area(struct page *page, struct zone *zone,
 				    unsigned int order, int migratetype)
@@ -787,10 +790,10 @@ static inline void add_to_free_area(struct page *page, struct zone *zone,
 static inline void add_to_free_area_tail(struct page *page, struct zone *zone,
 					 unsigned int order, int migratetype)
 {
-	struct free_area *area = &zone->free_area[order];
+	struct list_head *tail = aerator_get_tail(zone, order, migratetype);
 
-	list_add_tail(&page->lru, &area->free_list[migratetype]);
-	area->nr_free++;
+	list_add_tail(&page->lru, tail);
+	zone->free_area[order].nr_free++;
 }
 
 /* Used for pages which are on another list */
@@ -799,6 +802,8 @@ static inline void move_to_free_area(struct page *page, struct zone *zone,
 {
 	struct free_area *area = &zone->free_area[order];
 
+	clear_page_aerated(page, zone, area);
+
 	list_move(&page->lru, &area->free_list[migratetype]);
 }
 
@@ -806,6 +811,8 @@ static inline void del_page_from_free_area(struct page *page, struct zone *zone,
 					   unsigned int order)
 {
 	struct free_area *area = &zone->free_area[order];
+
+	clear_page_aerated(page, zone, area);
 
 	list_del(&page->lru);
 	__ClearPageBuddy(page);

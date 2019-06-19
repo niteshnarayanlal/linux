@@ -69,6 +69,7 @@
 #include <linux/lockdep.h>
 #include <linux/nmi.h>
 #include <linux/psi.h>
+#include <linux/memory_aeration.h>
 
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
@@ -889,10 +890,11 @@ buddy_merge_likely(unsigned long pfn, unsigned long buddy_pfn,
 static inline void __free_one_page(struct page *page,
 		unsigned long pfn,
 		struct zone *zone, unsigned int order,
-		int migratetype)
+		int migratetype, bool aerated)
 {
 	struct capture_control *capc = task_capc(zone);
 	unsigned long uninitialized_var(buddy_pfn);
+	bool fully_aerated = aerated;
 	unsigned long combined_pfn;
 	unsigned int max_order;
 	struct page *buddy;
@@ -923,6 +925,11 @@ continue_merging:
 			goto done_merging;
 		if (!page_is_buddy(page, buddy, order))
 			goto done_merging;
+
+		/* assume buddy is not aerated */
+		if (aerated)
+			fully_aerated = false;
+
 		/*
 		 * Our buddy is free or it is CONFIG_DEBUG_PAGEALLOC guard page,
 		 * merge with it and move up one order.
@@ -964,11 +971,17 @@ continue_merging:
 done_merging:
 	set_page_order(page, order);
 
-	if (buddy_merge_likely(pfn, buddy_pfn, page, order) ||
+	if (aerated ||
+	    buddy_merge_likely(pfn, buddy_pfn, page, order) ||
 	    is_shuffle_tail_page(order))
 		add_to_free_area_tail(page, zone, order, migratetype);
 	else
 		add_to_free_area(page, zone, order, migratetype);
+
+	if (fully_aerated)
+		set_page_aerated(page, zone, order, migratetype);
+	else
+		aerator_notify_free(zone, order);
 }
 
 /*
@@ -1251,7 +1264,7 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 		if (unlikely(isolated_pageblocks))
 			mt = get_pageblock_migratetype(page);
 
-		__free_one_page(page, page_to_pfn(page), zone, 0, mt);
+		__free_one_page(page, page_to_pfn(page), zone, 0, mt, false);
 		trace_mm_page_pcpu_drain(page, 0, mt);
 	}
 	spin_unlock(&zone->lock);
@@ -1267,7 +1280,7 @@ static void free_one_page(struct zone *zone,
 		is_migrate_isolate(migratetype))) {
 		migratetype = get_pfnblock_migratetype(page, pfn);
 	}
-	__free_one_page(page, pfn, zone, order, migratetype);
+	__free_one_page(page, pfn, zone, order, migratetype, false);
 	spin_unlock(&zone->lock);
 }
 
@@ -2110,6 +2123,77 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 
 	return NULL;
 }
+
+#ifdef CONFIG_AERATION
+/**
+ * get_aeration_page - Provide a "raw" page for aeration by the aerator
+ * @zone: Zone to draw pages from
+ * @order: Order to draw pages from
+ * @migratetype: Migratetype to draw pages from
+ *
+ * This function will obtain a page from above the boundary. As a result
+ * we can guarantee the page has not been aerated.
+ *
+ * The page will have the migrate type and order stored in the page
+ * metadata.
+ *
+ * Return: page pointer if raw page found, otherwise NULL
+ */
+struct page *get_aeration_page(struct zone *zone, unsigned int order,
+			       int migratetype)
+{
+	struct free_area *area = &(zone->free_area[order]);
+	struct list_head *list = &area->free_list[migratetype];
+	struct page *page;
+
+	/* Find a page of the appropriate size in the preferred list */
+	page = list_last_entry(aerator_get_tail(zone, order, migratetype),
+			       struct page, lru);
+	list_for_each_entry_from_reverse(page, list, lru) {
+		if (PageAerated(page)) {
+			page = list_first_entry(list, struct page, lru);
+			if (PageAerated(page))
+				break;
+		}
+
+		del_page_from_free_area(page, zone, order);
+
+		/* record migratetype and order within page */
+		set_pcppage_migratetype(page, migratetype);
+		set_page_private(page, order);
+		__mod_zone_freepage_state(zone, -(1 << order), migratetype);
+
+		return page;
+	}
+
+	return NULL;
+}
+
+/**
+ * put_aeration_page - Return a now-aerated "raw" page back where we got it
+ * @zone: Zone to return pages to
+ * @page: Previously "raw" page that can now be returned after aeration
+ *
+ * This function will pull the migratetype and order information out
+ * of the page and attempt to return it where it found it.
+ */
+void put_aeration_page(struct zone *zone, struct page *page)
+{
+	unsigned int order, mt;
+	unsigned long pfn;
+
+	mt = get_pcppage_migratetype(page);
+	pfn = page_to_pfn(page);
+
+	if (unlikely(has_isolate_pageblock(zone) || is_migrate_isolate(mt)))
+		mt = get_pfnblock_migratetype(page, pfn);
+
+	order = page_private(page);
+	set_page_private(page, 0);
+
+	__free_one_page(page, pfn, zone, order, mt, true);
+}
+#endif /* CONFIG_AERATION */
 
 /*
  * This array describes the order lists are fallen back to when
@@ -5905,9 +5989,12 @@ void __ref memmap_init_zone_device(struct zone *zone,
 static void __meminit zone_init_free_lists(struct zone *zone)
 {
 	unsigned int order, t;
-	for_each_migratetype_order(order, t) {
+	for_each_migratetype_order(order, t)
 		INIT_LIST_HEAD(&zone->free_area[order].free_list[t]);
+
+	for (order = MAX_ORDER; order--; ) {
 		zone->free_area[order].nr_free = 0;
+		zone->free_area[order].nr_free_aerated = 0;
 	}
 }
 
