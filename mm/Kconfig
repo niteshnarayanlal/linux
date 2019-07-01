@@ -765,4 +765,10 @@ config GUP_BENCHMARK
 config ARCH_HAS_PTE_SPECIAL
 	bool
 
+# PAGE_HINTING will allow the guest to report the free pages to the
+# host in fixed chunks as soon as the threshold is reached.
+config PAGE_HINTING
+       bool
+       def_bool n
+       depends on X86_64
 endmenu
