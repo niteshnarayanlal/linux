@@ -18,6 +18,7 @@
 #include <linux/mm.h>
 #include <linux/mount.h>
 #include <linux/magic.h>
+#include <linux/page_hinting.h>
 
 /*
  * Balloon device works in 4K page units.  So each page is pointed to by
@@ -35,6 +36,12 @@
 /* The size of a free page block in bytes */
 #define VIRTIO_BALLOON_FREE_PAGE_SIZE \
 	(1 << (VIRTIO_BALLOON_FREE_PAGE_ORDER + PAGE_SHIFT))
+/* Number of isolated pages to be reported to the host at a time.
+ * TODO:
+ * 1. Set it via host.
+ * 2. Find an optimal value for this.
+ */
+#define PAGE_HINTING_MAX_PAGES	16
 
 #ifdef CONFIG_BALLOON_COMPACTION
 static struct vfsmount *balloon_mnt;
@@ -45,6 +52,7 @@ enum virtio_balloon_vq {
 	VIRTIO_BALLOON_VQ_DEFLATE,
 	VIRTIO_BALLOON_VQ_STATS,
 	VIRTIO_BALLOON_VQ_FREE_PAGE,
+	VIRTIO_BALLOON_VQ_HINTING,
 	VIRTIO_BALLOON_VQ_MAX
 };
 
@@ -54,7 +62,8 @@ enum virtio_balloon_config_read {
 
 struct virtio_balloon {
 	struct virtio_device *vdev;
-	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *free_page_vq;
+	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *free_page_vq,
+			 *hinting_vq;
 
 	/* Balloon's own wq for cpu-intensive work items */
 	struct workqueue_struct *balloon_wq;
@@ -112,12 +121,75 @@ struct virtio_balloon {
 
 	/* To register a shrinker to shrink memory upon memory pressure */
 	struct shrinker shrinker;
+
+	/* Array object pointing at the isolated pages ready for hinting */
+	struct isolated_memory isolated_pages[PAGE_HINTING_MAX_PAGES];
 };
 
 static struct virtio_device_id id_table[] = {
 	{ VIRTIO_ID_BALLOON, VIRTIO_DEV_ANY_ID },
 	{ 0 },
 };
+
+static struct page_hinting_config page_hinting_conf;
+bool page_hinting_flag = true;
+struct virtio_balloon *hvb;
+module_param(page_hinting_flag, bool, 0444);
+MODULE_PARM_DESC(page_hinting_flag, "Enable page hinting");
+
+static int page_hinting_report(void)
+{
+	struct virtqueue *vq = hvb->hinting_vq;
+	struct scatterlist sg;
+	int err = 0, unused;
+
+	mutex_lock(&hvb->balloon_lock);
+	sg_init_one(&sg, hvb->isolated_pages, sizeof(hvb->isolated_pages[0]) *
+		    PAGE_HINTING_MAX_PAGES);
+	err = virtqueue_add_outbuf(vq, &sg, 1, hvb, GFP_KERNEL);
+	if (!err)
+		virtqueue_kick(hvb->hinting_vq);
+	wait_event(hvb->acked, virtqueue_get_buf(vq, &unused));
+	mutex_unlock(&hvb->balloon_lock);
+	return err;
+}
+
+void hint_pages(struct list_head *pages)
+{
+	struct device *dev = &hvb->vdev->dev;
+	struct page *page, *next;
+	int idx = 0, order, err;
+	unsigned long pfn;
+
+	list_for_each_entry_safe(page, next, pages, lru) {
+		pfn = page_to_pfn(page);
+		order = page_private(page);
+		hvb->isolated_pages[idx].phys_addr = pfn << PAGE_SHIFT;
+		hvb->isolated_pages[idx].size = (1 << order) * PAGE_SIZE;
+		idx++;
+	}
+	err = page_hinting_report();
+	if (err < 0)
+		dev_err(dev, "Failed to hint pages, err = %d\n", err);
+}
+
+static void page_hinting_init(struct virtio_balloon *vb)
+{
+	struct device *dev = &vb->vdev->dev;
+	int err;
+
+	page_hinting_conf.hint_pages = hint_pages;
+	page_hinting_conf.max_pages = PAGE_HINTING_MAX_PAGES;
+	err = page_hinting_enable(&page_hinting_conf);
+	if (err < 0) {
+		dev_err(dev, "Failed to enable page-hinting, err = %d\n", err);
+		page_hinting_flag = false;
+		page_hinting_conf.hint_pages = NULL;
+		page_hinting_conf.max_pages = 0;
+		return;
+	}
+	hvb = vb;
+}
 
 static u32 page_to_balloon_pfn(struct page *page)
 {
@@ -475,6 +547,7 @@ static int init_vqs(struct virtio_balloon *vb)
 	names[VIRTIO_BALLOON_VQ_DEFLATE] = "deflate";
 	names[VIRTIO_BALLOON_VQ_STATS] = NULL;
 	names[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
+	names[VIRTIO_BALLOON_VQ_HINTING] = NULL;
 
 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_STATS_VQ)) {
 		names[VIRTIO_BALLOON_VQ_STATS] = "stats";
@@ -486,10 +559,17 @@ static int init_vqs(struct virtio_balloon *vb)
 		callbacks[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
 	}
 
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING)) {
+		names[VIRTIO_BALLOON_VQ_HINTING] = "hinting_vq";
+		callbacks[VIRTIO_BALLOON_VQ_HINTING] = balloon_ack;
+	}
 	err = vb->vdev->config->find_vqs(vb->vdev, VIRTIO_BALLOON_VQ_MAX,
 					 vqs, callbacks, names, NULL, NULL);
 	if (err)
 		return err;
+
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING))
+		vb->hinting_vq = vqs[VIRTIO_BALLOON_VQ_HINTING];
 
 	vb->inflate_vq = vqs[VIRTIO_BALLOON_VQ_INFLATE];
 	vb->deflate_vq = vqs[VIRTIO_BALLOON_VQ_DEFLATE];
@@ -929,6 +1009,9 @@ static int virtballoon_probe(struct virtio_device *vdev)
 		if (err)
 			goto out_del_balloon_wq;
 	}
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING) &&
+	    page_hinting_flag)
+		page_hinting_init(vb);
 	virtio_device_ready(vdev);
 
 	if (towards_target(vb))
@@ -976,6 +1059,10 @@ static void virtballoon_remove(struct virtio_device *vdev)
 		destroy_workqueue(vb->balloon_wq);
 	}
 
+	if (!page_hinting_flag) {
+		hvb = NULL;
+		page_hinting_disable();
+	}
 	remove_common(vb);
 #ifdef CONFIG_BALLOON_COMPACTION
 	if (vb->vb_dev_info.inode)
@@ -1030,8 +1117,10 @@ static unsigned int features[] = {
 	VIRTIO_BALLOON_F_MUST_TELL_HOST,
 	VIRTIO_BALLOON_F_STATS_VQ,
 	VIRTIO_BALLOON_F_DEFLATE_ON_OOM,
+	VIRTIO_BALLOON_F_HINTING,
 	VIRTIO_BALLOON_F_FREE_PAGE_HINT,
 	VIRTIO_BALLOON_F_PAGE_POISON,
+	VIRTIO_BALLOON_F_HINTING,
 };
 
 static struct virtio_driver virtio_balloon_driver = {
