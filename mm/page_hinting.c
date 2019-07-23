@@ -334,7 +334,7 @@ static int __meminit page_hinting_memory_callback(struct notifier_block *self,
 }
 #endif
 
-int page_hinting_enable(const struct page_hinting_config *conf)
+int __meminit page_hinting_enable(const struct page_hinting_config *conf)
 {
 	int ret = -EBUSY;
 

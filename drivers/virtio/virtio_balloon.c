@@ -924,7 +924,7 @@ static int virtio_balloon_register_shrinker(struct virtio_balloon *vb)
 	return register_shrinker(&vb->shrinker);
 }
 
-static int virtballoon_probe(struct virtio_device *vdev)
+static int __meminit virtballoon_probe(struct virtio_device *vdev)
 {
 	struct virtio_balloon *vb;
 	__u32 poison_val;
