@@ -156,10 +156,14 @@ static void expand_bitmap(struct memory_notify *mn)
 	/* Considering the memory hotplugged is contiguous to the existing
 	 * memory.
 	 */
-	if (free_area[zone_idx].base_pfn > start_pfn &&
-	    free_area[zone_idx].end_pfn > end_pfn) {
+	if (free_area[zone_idx].base_pfn != 0) {
+		/* Do we even need the second check of end_pfn??? */
+		if (free_area[zone_idx].base_pfn < start_pfn && free_area[zone_idx].end_pfn > end_pfn) 
+			free_area[zone_idx].base_pfn = start_pfn;
+		else if (end_pfn > free_area[zone_idx].end_pfn)
+			free_area[zone_idx].end_pfn = end_pfn;
+	} else {
 		free_area[zone_idx].base_pfn = start_pfn;
-	} else if (end_pfn > free_area[zone_idx].base_pfn) {
 		free_area[zone_idx].end_pfn = end_pfn;
 	}
 	pages = free_area[zone_idx].end_pfn - free_area[zone_idx].base_pfn;
@@ -174,7 +178,7 @@ static void expand_bitmap(struct memory_notify *mn)
 		 */
 		return;
 	}
-	copy_bitmap(remap, zone_idx, free_area[zone_idx].nbits, prev_base);
+//	copy_bitmap(remap, zone_idx, free_area[zone_idx].nbits, prev_base);
 	bitmap_free(free_area[zone_idx].bitmap);
 	free_area[zone_idx].nbits = bitmap_size;
 	free_area[zone_idx].bitmap = remap;
@@ -192,9 +196,14 @@ static void shrink_bitmap(struct memory_notify *mn)
 	zone = page_zone(pfn_to_page(start_pfn));
 	zone_idx = zone_idx(zone);
 	prev_base = free_area[zone_idx].base_pfn;
-	if (free_area[zone_idx].base_pfn == start_pfn) {
-		if (free_area[zone_idx].end_pfn != end_pfn)
-			free_area[zone_idx].base_pfn = end_pfn + 1;
+
+	/* Considering memory will always be removed from low to high? */
+	if (free_area[zone_idx].base_pfn <= start_pfn) {
+		if (free_area[zone_idx].end_pfn > end_pfn)
+			/* why not end_pfn + 1? Why the last PFN is not included in every hotunplug
+			 * request? if for a hotunplug the last pfn was pfn then for the next
+			 * request start should be pfn+1 and not pfn.*/
+			free_area[zone_idx].base_pfn = end_pfn;
 		else {
 			/* When the entire zone is removed.
 			 * TODO: Is this possible?.
@@ -205,13 +214,13 @@ static void shrink_bitmap(struct memory_notify *mn)
 			free_area[zone_idx].end_pfn = 0;
 		}
 
-	} else if (free_area[zone_idx].end_pfn == end_pfn) {
-		free_area[zone_idx].end_pfn = start_pfn - 1;
 	}
 	/* TODO:
 	 * If the hotremove creates a hole in the existing zone.
 	 * Then, do we have to do anything??
 	 */
+
+
 	pages = free_area[zone_idx].end_pfn - free_area[zone_idx].base_pfn;
 	bitmap_size = (pages >> PAGE_HINTING_MIN_ORDER) + 1;
 	if (!bitmap_size)
@@ -224,7 +233,7 @@ static void shrink_bitmap(struct memory_notify *mn)
 		 */
 		return;
 	}
-	copy_bitmap(remap, zone_idx, bitmap_size, prev_base);
+//	copy_bitmap(remap, zone_idx, bitmap_size, prev_base);
 	bitmap_free(free_area[zone_idx].bitmap);
 	free_area[zone_idx].nbits = bitmap_size;
 	free_area[zone_idx].bitmap = remap;
