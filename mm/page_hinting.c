@@ -131,7 +131,9 @@ static void copy_bitmap(unsigned long *dst, int zone_idx, unsigned long size,
 	base_pfn = free_area[zone_idx].base_pfn;
 	for_each_set_bit(oldbit, src, size) {
 		pfn = (oldbit << PAGE_HINTING_MIN_ORDER) + prev_base;
-		page = pfn_to_page(pfn);
+		page = pfn_to_online_page(pfn);
+		if (!page)
+			continue;
 		newbit = pfn_to_bit(page, zone_idx, base_pfn);
 		if (newbit < size)
 			set_bit(newbit, dst);
@@ -145,22 +147,24 @@ static void expand_bitmap(struct memory_notify *mn)
 	unsigned long start_pfn, end_pfn, pages, bitmap_size, prev_base;
 	unsigned long *remap;
 	struct zone *zone;
+	struct page *page;
 	int zone_idx;
 
 	start_pfn = mn->start_pfn;
 	end_pfn = start_pfn + mn->nr_pages;
-	zone = page_zone(pfn_to_page(start_pfn));
+	page = pfn_to_page(start_pfn);
+	zone = page_zone(page);
 	zone_idx = zone_idx(zone);
 	prev_base = free_area[zone_idx].base_pfn;
-	zone = page_zone(pfn_to_page(start_pfn));
 	/* Considering the memory hotplugged is contiguous to the existing
 	 * memory.
 	 */
+	printk("\nzone_idx:%d prev_base:%lu prev_endpfn:%lu shrink start_pfn:%lu end_pfn:%lu nr_pages:%lu\n", zone_idx, prev_base, free_area[zone_idx].end_pfn, start_pfn, end_pfn, mn->nr_pages);
 	if (free_area[zone_idx].base_pfn != 0) {
-		/* Do we even need the second check of end_pfn??? */
-		if (free_area[zone_idx].base_pfn < start_pfn && free_area[zone_idx].end_pfn > end_pfn) 
+		/* Are we fine with a hole in between? */
+		if (free_area[zone_idx].base_pfn > start_pfn && free_area[zone_idx].end_pfn > end_pfn)
 			free_area[zone_idx].base_pfn = start_pfn;
-		else if (end_pfn > free_area[zone_idx].end_pfn)
+		else if (free_area[zone_idx].base_pfn < start_pfn && end_pfn > free_area[zone_idx].end_pfn)
 			free_area[zone_idx].end_pfn = end_pfn;
 	} else {
 		free_area[zone_idx].base_pfn = start_pfn;
@@ -168,6 +172,7 @@ static void expand_bitmap(struct memory_notify *mn)
 	}
 	pages = free_area[zone_idx].end_pfn - free_area[zone_idx].base_pfn;
 	bitmap_size = (pages >> PAGE_HINTING_MIN_ORDER) + 1;
+	printk("\nAfter update base_pfn:%lu end_pfn:%lu bitmap_size:%lu\n", free_area[zone_idx].base_pfn, free_area[zone_idx].end_pfn, bitmap_size);
 	if (!bitmap_size)
 		return;
 	remap = bitmap_zalloc(bitmap_size, GFP_KERNEL);
@@ -189,38 +194,39 @@ static void shrink_bitmap(struct memory_notify *mn)
 	unsigned long start_pfn, end_pfn, pages, bitmap_size, prev_base;
 	unsigned long *remap;
 	struct zone *zone;
+	struct page *page;
 	int zone_idx;
 
 	start_pfn = mn->start_pfn;
 	end_pfn = start_pfn + mn->nr_pages;
-	zone = page_zone(pfn_to_page(start_pfn));
+	page = pfn_to_page(start_pfn);
+	zone = page_zone(page);
 	zone_idx = zone_idx(zone);
 	prev_base = free_area[zone_idx].base_pfn;
 
+	printk("\nzone_idx:%d prev_base:%lu prev_endpfn:%lu shrink start_pfn:%lu end_pfn:%lu nr_pages:%lu\n", zone_idx, prev_base, free_area[zone_idx].end_pfn, start_pfn, end_pfn, mn->nr_pages);
 	/* Considering memory will always be removed from low to high? */
 	if (free_area[zone_idx].base_pfn <= start_pfn) {
-		if (free_area[zone_idx].end_pfn > end_pfn)
+		if (free_area[zone_idx].base_pfn == start_pfn && free_area[zone_idx].end_pfn > end_pfn) {
 			/* why not end_pfn + 1? Why the last PFN is not included in every hotunplug
 			 * request? if for a hotunplug the last pfn was pfn then for the next
 			 * request start should be pfn+1 and not pfn.*/
 			free_area[zone_idx].base_pfn = end_pfn;
-		else {
-			/* When the entire zone is removed.
-			 * TODO: Is this possible?.
-			 * TODO: Do we have to cehck for wrong cases here?
-			 * or those will be taken care by the hotplug code.
-			 */
+		} else if (free_area[zone_idx].base_pfn == start_pfn && free_area[zone_idx].end_pfn == end_pfn){
 			free_area[zone_idx].base_pfn = 0;
 			free_area[zone_idx].end_pfn = 0;
+		} else if (free_area[zone_idx].base_pfn < start_pfn && free_area[zone_idx].end_pfn > end_pfn){
+			/* If there is a hole then we stop tracking
+			 * all the pages beyond the end of first section.
+			 * As soon as it is freed.
+			 */
+			free_area[zone_idx].end_pfn = start_pfn - 1;
 		}
-
 	}
 	/* TODO:
 	 * If the hotremove creates a hole in the existing zone.
 	 * Then, do we have to do anything??
 	 */
-
-
 	pages = free_area[zone_idx].end_pfn - free_area[zone_idx].base_pfn;
 	bitmap_size = (pages >> PAGE_HINTING_MIN_ORDER) + 1;
 	if (!bitmap_size)
@@ -245,10 +251,15 @@ static void revert_bitmap(struct memory_notify *mn)
 	struct zone *zone, *revert_zone;
 	int revert_zone_idx, zone_idx;
 	unsigned long *remap;
+	struct page *page;
+
 
 	start_pfn = mn->start_pfn;
 	end_pfn = start_pfn + mn->nr_pages;
-	revert_zone = page_zone(pfn_to_page(start_pfn));
+	page = pfn_to_online_page(start_pfn);
+	if (!page)
+		return;
+	revert_zone = page_zone(page);
 	revert_zone_idx = zone_idx(revert_zone);
 	prev_base = free_area[revert_zone_idx].base_pfn;
 	free_area[revert_zone_idx].base_pfn = 0;
@@ -380,6 +391,7 @@ static void release_buddy_pages(struct list_head *pages)
 	struct zone *zone;
 
 	list_for_each_entry_safe(page, next, pages, lru) {
+		printk("\nReleasing page:%lu\n", page_to_pfn(page));
 		zone_idx = page_zonenum(page);
 		base_pfn = free_area[zone_idx].base_pfn;
 		zone = page_zone(page);
@@ -391,6 +403,7 @@ static void release_buddy_pages(struct list_head *pages)
 		mt = get_pageblock_migratetype(page);
 		__free_one_page(page, page_to_pfn(page), zone,
 				order, mt, false);
+		printk("\nReleased page:%lu\n", page_to_pfn(page));
 		spin_unlock(&zone->lock);
 	}
 }
@@ -407,6 +420,8 @@ static void bm_set_pfn(struct page *page)
 	/*
 	 * TODO: fix possible underflows.
 	 */
+	if (zone_idx == 3)
+		printk("\nPFN which is getting set:%lu at bit:%lu base_pfn:%lu\n", page_to_pfn(page), bitnr, base_pfn);
 	if (free_area[zone_idx].bitmap &&
 	    bitnr < free_area[zone_idx].nbits &&
 	    !test_and_set_bit(bitnr, free_area[zone_idx].bitmap))
@@ -444,6 +459,8 @@ static void scan_zone_free_area(int zone_idx, int free_pages)
 			 * restoring page order to use it while releasing
 			 * the pages back to the buddy.
 			 */
+			if (zone_idx == 3)
+				printk("\nPFN which is getting isolated:%lu at bit:%lu\n", page_to_pfn(page), setbit);
 			set_page_private(page, order);
 			list_add_tail(&page->lru, &isolated_pages);
 			isolated_cnt++;
