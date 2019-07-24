@@ -744,6 +744,14 @@ PAGE_TYPE_OPS(Buddy, buddy)
 PAGE_TYPE_OPS(Offline, offline)
 
 /*
+ * PageHinted() is an alias for Offline, however it is not meant to be an
+ * exclusive value. It should be combined with PageBuddy() when seen as it
+ * is meant to indicate that the page has been scrubbed while waiting in
+ * the buddy system.
+ */
+PAGE_TYPE_OPS(Hinted, offline)
+
+/*
  * If kmemcg is enabled, the buddy allocator will set PageKmemcg() on
  * pages allocated with __GFP_ACCOUNT. It gets cleared on page free.
  */

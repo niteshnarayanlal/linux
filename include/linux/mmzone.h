@@ -460,6 +460,14 @@ struct zone {
 	seqlock_t		span_seqlock;
 #endif
 
+#ifdef CONFIG_PAGE_HINTING
+	/*
+	 * Pointer to hinted page tracking statistics array. The size of
+	 * the array is MAX_ORDER - PAGE_HINTING_MIN_ORDER. NULL when
+	 * page hinting is not present.
+	 */
+	unsigned long		*hinted_pages;
+#endif
 	int initialized;
 
 	/* Write-intensive fields used from the page allocator */
@@ -534,6 +542,14 @@ enum pgdat_flags {
 enum zone_flags {
 	ZONE_BOOSTED_WATERMARK,		/* zone recently boosted watermarks.
 					 * Cleared when kswapd is woken.
+					 */
+	ZONE_PAGE_HINTING_REQUESTED,	/* zone enabled page hinting and has
+					 * requested flushing the data out of
+					 * higher order pages.
+					 */
+	ZONE_PAGE_HINTING_ACTIVE,	/* zone enabled page hinting and is
+					 * activly flushing the data out of
+					 * higher order pages.
 					 */
 };
 
@@ -755,6 +771,8 @@ static inline bool pgdat_is_empty(pg_data_t *pgdat)
 	return !pgdat->node_start_pfn && !pgdat->node_spanned_pages;
 }
 
+#include <linux/page_hinting.h>
+
 /* Used for pages not on another list */
 static inline void add_to_free_list(struct page *page, struct zone *zone,
 				    unsigned int order, int migratetype)
@@ -769,10 +787,16 @@ static inline void add_to_free_list(struct page *page, struct zone *zone,
 static inline void add_to_free_list_tail(struct page *page, struct zone *zone,
 					 unsigned int order, int migratetype)
 {
-	struct free_area *area = &zone->free_area[order];
+	struct list_head *tail = get_unhinted_tail(zone, order, migratetype);
 
-	list_add_tail(&page->lru, &area->free_list[migratetype]);
-	area->nr_free++;
+	/*
+	 * To prevent the unhinted pages from being interleaved with the
+	 * hinted ones while we are actively processing pages we will use
+	 * the head of the hinted pages to determine the tail of the free
+	 * list.
+	 */
+	list_add_tail(&page->lru, tail);
+	zone->free_area[order].nr_free++;
 }
 
 /* Used for pages which are on another list */
@@ -781,12 +805,22 @@ static inline void move_to_free_list(struct page *page, struct zone *zone,
 {
 	struct free_area *area = &zone->free_area[order];
 
+	/*
+	 * Clear Hinted flag, if present, to avoid placing hinted pages
+	 * at the top of the free_list. It is cheaper to just process this
+	 * page again, then have to walk around a page that is already hinted.
+	 */
+	clear_page_hinted(page, zone);
+
 	list_move(&page->lru, &area->free_list[migratetype]);
 }
 
 static inline void del_page_from_free_list(struct page *page, struct zone *zone,
 					   unsigned int order)
 {
+	/* Clear Hinted flag, if present, before clearing the Buddy flag */
+	clear_page_hinted(page, zone);
+
 	list_del(&page->lru);
 	__ClearPageBuddy(page);
 	set_page_private(page, 0);
