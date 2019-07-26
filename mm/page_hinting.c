@@ -35,10 +35,8 @@ struct zone_free_area {
 } free_area[MAX_NR_ZONES];
 
 static void page_hinting_wq(struct work_struct *work);
-struct work_struct hinting_work;
 static DEFINE_MUTEX(page_hinting_mutex);
-const struct page_hinting_config *page_hinting_conf;
-atomic_t page_hinting_active;
+static struct page_hinting_config *phconf;
 
 /* zone_free_area_cleanup - free and reset the zone_free_area fields only for
  * the zones which have been initialized.
@@ -116,12 +114,12 @@ static int zone_free_area_init(void)
 	return 0;
 }
 
-int page_hinting_enable(const struct page_hinting_config *conf)
+int page_hinting_enable(struct page_hinting_config *conf)
 {
 	int ret = -EBUSY;
 
 	/* Check if someone is already using */
-	if (page_hinting_conf) 
+	if (phconf) 
 		return ret;
 
 	mutex_lock(&page_hinting_mutex);
@@ -132,8 +130,8 @@ int page_hinting_enable(const struct page_hinting_config *conf)
 		return ret;
 	}
 
-	page_hinting_conf = conf;
-	INIT_WORK(&hinting_work, page_hinting_wq);
+	phconf = conf;
+	INIT_WORK(&phconf->hinting_work, page_hinting_wq);
 	mutex_unlock(&page_hinting_mutex);
 
 	return ret;
@@ -143,9 +141,9 @@ EXPORT_SYMBOL_GPL(page_hinting_enable);
 void page_hinting_disable(void)
 {
 	/* Cancel any pending hinting request */
-	cancel_work_sync(&hinting_work);
+	cancel_work_sync(&phconf->hinting_work);
 	/* Avoid tracking any new free page in the bitmap */
-	page_hinting_conf = NULL;
+	phconf = NULL;
 	/* Cleanup the bitmaps and old tracking data */
 	zone_free_area_cleanup(MAX_NR_ZONES);
 }
@@ -256,10 +254,10 @@ static void scan_zone_free_area(int zone_idx)
 			set_page_private(page, order);
 			list_add_tail(&page->lru, &isolated_pages);
 			isolated_cnt++;
-			if (isolated_cnt == page_hinting_conf->max_pages) {
+			if (isolated_cnt == phconf->max_pages) {
 				spin_unlock(&zone->lock);
 				 /* Report isolated pages to the hypervisor */
-				page_hinting_conf->hint_pages(&isolated_pages);
+				phconf->hint_pages(&isolated_pages);
 				spin_lock(&zone->lock);
 				 /* Return processed pages back to the buddy */
 				release_isolated_pages(&isolated_pages);
@@ -274,7 +272,7 @@ static void scan_zone_free_area(int zone_idx)
 	 * would still prefer to hint them as we have already isolated them.
 	 */
 	if (isolated_cnt) {
-		page_hinting_conf->hint_pages(&isolated_pages);
+		phconf->hint_pages(&isolated_pages);
 		spin_lock(&zone->lock);
 		release_isolated_pages(&isolated_pages);
 		spin_unlock(&zone->lock);
@@ -290,17 +288,17 @@ static void page_hinting_wq(struct work_struct *work)
 {
 	int zone_idx, free_pages;
 
-	atomic_set(&page_hinting_active, 1);
+	atomic_inc(&phconf->refcnt);
 	for (zone_idx = 0; zone_idx < MAX_NR_ZONES; zone_idx++) {
 		free_pages = atomic_read(&free_area[zone_idx].free_pages);
-		if (free_pages >= page_hinting_conf->max_pages)
+		if (free_pages >= phconf->max_pages)
 			scan_zone_free_area(zone_idx);
 	}
 	/*
 	 * We have processed all the zone bitmaps, we can process new page
 	 * hinting request now.
 	 */
-	atomic_set(&page_hinting_active, 0);
+	atomic_dec(&phconf->refcnt);
 }
 
 /*
@@ -317,21 +315,18 @@ void __page_hinting_enqueue(struct page *page)
 	 * We should not process the page as the page hinting is not
 	 * yet properly setup by the backend.
 	 */
-	if (!page_hinting_conf)
+	if (!phconf)
 		return;
 
 	zone_idx = zone_idx(page_zone(page));
 	bitmap_set_bit(page, zone_idx);
 
 	/*
-	 * If an enqueued hinting work is in progress we should avoid
-	 * checking/queueing another work as the per zone 'free_pages' counter
-	 * doesn't get updated until the enqueued work is complete.
+	 * If an enqueued hinting work is in progress or we don't have enough
+	 * free pages we should not enqueue another work until it is complete.
 	 */
-	if (atomic_read(&page_hinting_active))
-		return;
-
-	if (atomic_read(&free_area[zone_idx].free_pages) >=
-			page_hinting_conf->max_pages)
-		queue_work_on(smp_processor_id(), system_wq, &hinting_work);
+	if (!atomic_read(&phconf->refcnt) &&
+	    atomic_read(&free_area[zone_idx].free_pages) >= phconf->max_pages)
+		queue_work_on(smp_processor_id(), system_wq,
+			      &phconf->hinting_work);
 }

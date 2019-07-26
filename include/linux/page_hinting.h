@@ -14,10 +14,14 @@
  *			synchornously to the host.
  * @max_pages:		Maxmimum pages that are going to be hinted to the host
  *			at a time of granularity >= PAGE_HINTING_MIN_ORDER.
+ * @hinting_work:	work object to process page hinting rqeuests.
+ * @refcnt:		Reference counter to keep track of the usage.
  */
 struct page_hinting_config {
 	void (*hint_pages)(struct list_head *batch);
 	int max_pages;
+	struct work_struct hinting_work;
+	atomic_t refcnt;
 };
 
 void __page_hinting_enqueue(struct page *page);
@@ -36,14 +40,14 @@ static inline void page_hinting_enqueue(struct page *page, int order)
 		return;
 	__page_hinting_enqueue(page);
 }
-int page_hinting_enable(const struct page_hinting_config *conf);
+int page_hinting_enable(struct page_hinting_config *conf);
 void page_hinting_disable(void);
 #else
 static inline void page_hinting_enqueue(struct page *page, int order)
 {
 }
 
-static inline int page_hinting_enable(const struct page_hinting_config *conf)
+static inline int page_hinting_enable(struct page_hinting_config *conf)
 {
 	return -EOPNOTSUPP;
 }
