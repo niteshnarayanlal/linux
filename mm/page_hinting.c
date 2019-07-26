@@ -14,7 +14,7 @@
 #include <linux/kvm_host.h>
 
 /*
- * struct zone_free_area: For a single zone across NUMA nodes, it holds the
+ * struct zone_free_area - For a single zone across NUMA nodes, it holds the
  * bitmap pointer to track the free pages and other required parameters
  * used to recover these pages by scanning the bitmap.
  * @bitmap:		Pointer to the bitmap in PAGE_HINTING_MIN_ORDER
@@ -34,13 +34,18 @@ struct zone_free_area {
 	unsigned long nbits;
 } free_area[MAX_NR_ZONES];
 
-static void init_hinting_wq(struct work_struct *work);
-static DEFINE_MUTEX(page_hinting_init);
-const struct page_hinting_config *page_hitning_conf;
+static void page_hinting_wq(struct work_struct *work);
 struct work_struct hinting_work;
+static DEFINE_MUTEX(page_hinting_mutex);
+const struct page_hinting_config *page_hinting_conf;
 atomic_t page_hinting_active;
 
-void free_area_cleanup(int nr_zones)
+/* zone_free_area_cleanup - free and reset the zone_free_area fields only for
+ * the zones which have been initialized.
+ *
+ * nr_zones:	number of zones which have been initialized.
+ */
+void zone_free_area_cleanup(int nr_zones)
 {
 	int zone_idx;
 
@@ -53,72 +58,101 @@ void free_area_cleanup(int nr_zones)
 	}
 }
 
+static int zone_free_area_init(void)
+{
+	struct zone *zone;
+	int zone_idx;
+
+	for_each_populated_zone(zone) {
+		zone_idx = zone_idx(zone);
+		/* TODO: Add comment that ZONE_DEVICE pages are not found in
+		 * the buddy. */
+#ifdef CONFIG_ZONE_DEVICE
+		if (zone_idx == ZONE_DEVICE)
+			continue;
+#endif
+		spin_lock(&zone->lock);
+		if (free_area[zone_idx].base_pfn) {
+			free_area[zone_idx].base_pfn =
+				min(free_area[zone_idx].base_pfn,
+				    zone->zone_start_pfn);
+			free_area[zone_idx].end_pfn =
+				max(free_area[zone_idx].end_pfn,
+				    zone->zone_start_pfn +
+				    zone->spanned_pages);
+		} else {
+			free_area[zone_idx].base_pfn =
+				zone->zone_start_pfn;
+			free_area[zone_idx].end_pfn =
+				zone->zone_start_pfn +
+				zone->spanned_pages;
+		}
+		spin_unlock(&zone->lock);
+	}
+
+	for (zone_idx = 0; zone_idx < MAX_NR_ZONES; zone_idx++) {
+		unsigned long bitmap_size;
+		unsigned long pages;
+		
+		pages = free_area[zone_idx].end_pfn -
+				free_area[zone_idx].base_pfn;
+		bitmap_size = (pages >> PAGE_HINTING_MIN_ORDER) + 1;
+
+		if (!bitmap_size)
+			continue;
+		free_area[zone_idx].bitmap = bitmap_zalloc(bitmap_size,
+							   GFP_KERNEL);
+		if (!free_area[zone_idx].bitmap) {
+			/* 
+			 * VM is probably running low in memory we should not
+			 * enable page hinting at this time.
+			 */
+			zone_free_area_cleanup(zone_idx);
+			return -ENOMEM;
+		}
+		free_area[zone_idx].nbits = bitmap_size;
+	}
+
+	return 0;
+}
+
 int page_hinting_enable(const struct page_hinting_config *conf)
 {
-	unsigned long bitmap_size = 0;
-	int zone_idx = 0, ret = -EBUSY;
-	struct zone *zone;
+	int ret = -EBUSY;
 
-	mutex_lock(&page_hinting_init);
-	if (!page_hitning_conf) {
-		for_each_populated_zone(zone) {
-			zone_idx = zone_idx(zone);
-#ifdef CONFIG_ZONE_DEVICE
-			if (zone_idx == ZONE_DEVICE)
-				continue;
-#endif
-			spin_lock(&zone->lock);
-			if (free_area[zone_idx].base_pfn) {
-				free_area[zone_idx].base_pfn =
-					min(free_area[zone_idx].base_pfn,
-					    zone->zone_start_pfn);
-				free_area[zone_idx].end_pfn =
-					max(free_area[zone_idx].end_pfn,
-					    zone->zone_start_pfn +
-					    zone->spanned_pages);
-			} else {
-				free_area[zone_idx].base_pfn =
-					zone->zone_start_pfn;
-				free_area[zone_idx].end_pfn =
-					zone->zone_start_pfn +
-					zone->spanned_pages;
-			}
-			spin_unlock(&zone->lock);
-		}
+	/* Check if someone is already using */
+	if (page_hinting_conf) 
+		return ret;
 
-		for (zone_idx = 0; zone_idx < MAX_NR_ZONES; zone_idx++) {
-			unsigned long pages = free_area[zone_idx].end_pfn -
-					free_area[zone_idx].base_pfn;
-			bitmap_size = (pages >> PAGE_HINTING_MIN_ORDER) + 1;
-			if (!bitmap_size)
-				continue;
-			free_area[zone_idx].bitmap = bitmap_zalloc(bitmap_size,
-								   GFP_KERNEL);
-			if (!free_area[zone_idx].bitmap) {
-				free_area_cleanup(zone_idx);
-				mutex_unlock(&page_hinting_init);
-				return -ENOMEM;
-			}
-			free_area[zone_idx].nbits = bitmap_size;
-		}
-		page_hitning_conf = conf;
-		INIT_WORK(&hinting_work, init_hinting_wq);
-		ret = 0;
+	mutex_lock(&page_hinting_mutex);
+	/* Initialize the zone_free_area fields for each zone */
+	ret = zone_free_area_init();
+	if (ret < 0) {
+		mutex_unlock(&page_hinting_mutex);
+		return ret;
 	}
-	mutex_unlock(&page_hinting_init);
+
+	page_hinting_conf = conf;
+	INIT_WORK(&hinting_work, page_hinting_wq);
+	mutex_unlock(&page_hinting_mutex);
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(page_hinting_enable);
 
 void page_hinting_disable(void)
 {
+	/* Cancel any pending hinting request */
 	cancel_work_sync(&hinting_work);
-	page_hitning_conf = NULL;
-	free_area_cleanup(MAX_NR_ZONES);
+	/* Avoid tracking any new free page in the bitmap */
+	page_hinting_conf = NULL;
+	/* Cleanup the bitmaps and old tracking data */
+	zone_free_area_cleanup(MAX_NR_ZONES);
 }
 EXPORT_SYMBOL_GPL(page_hinting_disable);
 
-static unsigned long pfn_to_bit(struct page *page, int zone_idx)
+/* TODO: Will it change in some way for sparsemem? */
+static inline unsigned long pfn_to_bit(struct page *page, int zone_idx)
 {
 	unsigned long bitnr;
 
@@ -127,9 +161,17 @@ static unsigned long pfn_to_bit(struct page *page, int zone_idx)
 	return bitnr;
 }
 
-static void release_buddy_pages(struct list_head *pages)
+/*
+ * release_isolated_pages - returns the isolated pages back to the buddy.
+ * @pages:	List of isolated pages.
+ *
+ * This function fetches migratetype, order and other information from the
+ * pages in the list and put the page back to the zone from where it has been
+ * removed.
+ */
+static void release_isolated_pages(struct list_head *pages)
 {
-	int mt = 0, zone_idx, order;
+	int mt, zone_idx, order;
 	struct page *page, *next;
 	unsigned long bitnr;
 	struct zone *zone;
@@ -138,21 +180,25 @@ static void release_buddy_pages(struct list_head *pages)
 		zone_idx = page_zonenum(page);
 		zone = page_zone(page);
 		bitnr = pfn_to_bit(page, zone_idx);
-		spin_lock(&zone->lock);
-		list_del(&page->lru);
 		order = page_private(page);
 		set_page_private(page, 0);
 		mt = get_pageblock_migratetype(page);
+/* TODO: Do we want to check the following?
+		if (unlikely(has_isolate_pageblock(zone) ||
+			     is_migrate_isolate(mt))) {
+	                mt = get_pfnblock_migratetype(page, pfn);
+        	        set_pcppage_migratetype(page, mt);
+		}
+*/
+		list_del(&page->lru);
 		__free_one_page(page, page_to_pfn(page), zone,
 				order, mt, false);
-		spin_unlock(&zone->lock);
 	}
 }
 
-static void bm_set_pfn(struct page *page)
+static void bitmap_set_bit(struct page *page, int zone_idx)
 {
 	struct zone *zone = page_zone(page);
-	int zone_idx = page_zonenum(page);
 	unsigned long bitnr = 0;
 
 	lockdep_assert_held(&zone->lock);
@@ -166,24 +212,31 @@ static void bm_set_pfn(struct page *page)
 		atomic_inc(&free_area[zone_idx].free_pages);
 }
 
-static void scan_zone_free_area(int zone_idx, int free_pages)
+/*
+ * scan_zone_free_area - Checks the bits set in the bitmap for the requested
+ * zone. For each of the set bit, it finds the respective page and checks if
+ * it is still free. If so, it is added to a local list. Once the list has
+ * sufficient isolated pages it is passed on to the backend driver for
+ * reporting to the host. After which the isolated pages are returned back
+ * to the buddy.
+ *
+ * @zone_idx:	zone index for the zone whose bitmap needs to be scanned.
+ */
+static void scan_zone_free_area(int zone_idx)
 {
-	int ret = 0, order, isolated_cnt = 0;
-	unsigned long set_bit, start = 0;
+	int order, ret, isolated_cnt = 0;
+	unsigned long setbit, nbits;
 	LIST_HEAD(isolated_pages);
 	struct page *page;
 	struct zone *zone;
 
-	for (;;) {
-		ret = 0;
-		set_bit = find_next_bit(free_area[zone_idx].bitmap,
-					free_area[zone_idx].nbits, start);
-		if (set_bit >= free_area[zone_idx].nbits)
-			break;
-		page = pfn_to_online_page((set_bit << PAGE_HINTING_MIN_ORDER) +
+	nbits = free_area[zone_idx].nbits;
+	for_each_set_bit(setbit, free_area[zone_idx].bitmap, nbits) {
+		page = pfn_to_online_page((setbit << PAGE_HINTING_MIN_ORDER) +
 				free_area[zone_idx].base_pfn);
 		if (!page)
 			continue;
+		
 		zone = page_zone(page);
 		spin_lock(&zone->lock);
 
@@ -192,59 +245,93 @@ static void scan_zone_free_area(int zone_idx, int free_pages)
 			order = page_private(page);
 			ret = __isolate_free_page(page, order);
 		}
-		clear_bit(set_bit, free_area[zone_idx].bitmap);
+		clear_bit(setbit, free_area[zone_idx].bitmap);
 		atomic_dec(&free_area[zone_idx].free_pages);
-		spin_unlock(&zone->lock);
+
 		if (ret) {
 			/*
-			 * restoring page order to use it while releasing
+			 * Restoring page order to use it while releasing
 			 * the pages back to the buddy.
 			 */
 			set_page_private(page, order);
 			list_add_tail(&page->lru, &isolated_pages);
 			isolated_cnt++;
-			if (isolated_cnt == page_hitning_conf->max_pages) {
-				page_hitning_conf->hint_pages(&isolated_pages);
-				release_buddy_pages(&isolated_pages);
+			if (isolated_cnt == page_hinting_conf->max_pages) {
+				spin_unlock(&zone->lock);
+				 /* Report isolated pages to the hypervisor */
+				page_hinting_conf->hint_pages(&isolated_pages);
+				spin_lock(&zone->lock);
+				 /* Return processed pages back to the buddy */
+				release_isolated_pages(&isolated_pages);
 				isolated_cnt = 0;
 			}
 		}
-		start = set_bit + 1;
+		spin_unlock(&zone->lock);
+		ret = 0;
 	}
+	/*
+	 * If isolated pages count does not meet the max_pages threshold, we
+	 * would still prefer to hint them as we have already isolated them.
+	 */
 	if (isolated_cnt) {
-		page_hitning_conf->hint_pages(&isolated_pages);
-		release_buddy_pages(&isolated_pages);
+		page_hinting_conf->hint_pages(&isolated_pages);
+		spin_lock(&zone->lock);
+		release_isolated_pages(&isolated_pages);
+		spin_unlock(&zone->lock);
 	}
 }
 
-static void init_hinting_wq(struct work_struct *work)
+/*
+ * page_hinting_wq - checks the number of free_pages in all the zones and
+ * invokes a request to scan the respective bitmap for each zone which has
+ * free_pages >= the threshold specified by the backend.
+ */
+static void page_hinting_wq(struct work_struct *work)
 {
 	int zone_idx, free_pages;
 
 	atomic_set(&page_hinting_active, 1);
 	for (zone_idx = 0; zone_idx < MAX_NR_ZONES; zone_idx++) {
 		free_pages = atomic_read(&free_area[zone_idx].free_pages);
-		if (free_pages >= page_hitning_conf->max_pages)
-			scan_zone_free_area(zone_idx, free_pages);
+		if (free_pages >= page_hinting_conf->max_pages)
+			scan_zone_free_area(zone_idx);
 	}
+	/*
+	 * We have processed all the zone bitmaps, we can process new page
+	 * hinting request now.
+	 */
 	atomic_set(&page_hinting_active, 0);
 }
 
-void page_hinting_enqueue(struct page *page, int order)
+/*
+ * __page_hinting_enqueue - if page hinting is properly enabled it sets the bit
+ * corresponding to the page in the bitmap. After which if the number of
+ * free_pages in the zone meets the threshold it enqueues a job in the wq
+ * if another job is not already enqueued.
+ */
+void __page_hinting_enqueue(struct page *page)
 {
 	int zone_idx;
 
-	if (!page_hitning_conf || order < PAGE_HINTING_MIN_ORDER)
+	/*
+	 * We should not process the page as the page hinting is not
+	 * yet properly setup by the backend.
+	 */
+	if (!page_hinting_conf)
 		return;
 
-	bm_set_pfn(page);
+	zone_idx = zone_idx(page_zone(page));
+	bitmap_set_bit(page, zone_idx);
+
+	/*
+	 * If an enqueued hinting work is in progress we should avoid
+	 * checking/queueing another work as the per zone 'free_pages' counter
+	 * doesn't get updated until the enqueued work is complete.
+	 */
 	if (atomic_read(&page_hinting_active))
 		return;
-	zone_idx = zone_idx(page_zone(page));
-	if (atomic_read(&free_area[zone_idx].free_pages) >=
-			page_hitning_conf->max_pages) {
-		int cpu = smp_processor_id();
 
-		queue_work_on(cpu, system_wq, &hinting_work);
-	}
+	if (atomic_read(&free_area[zone_idx].free_pages) >=
+			page_hinting_conf->max_pages)
+		queue_work_on(smp_processor_id(), system_wq, &hinting_work);
 }

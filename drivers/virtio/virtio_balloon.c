@@ -36,12 +36,6 @@
 /* The size of a free page block in bytes */
 #define VIRTIO_BALLOON_FREE_PAGE_SIZE \
 	(1 << (VIRTIO_BALLOON_FREE_PAGE_ORDER + PAGE_SHIFT))
-/* Number of isolated pages to be reported to the host at a time.
- * TODO:
- * 1. Set it via host.
- * 2. Find an optimal value for this.
- */
-#define PAGE_HINTING_MAX_PAGES	16
 
 #ifdef CONFIG_BALLOON_COMPACTION
 static struct vfsmount *balloon_mnt;
@@ -141,16 +135,18 @@ static int page_hinting_report(void)
 {
 	struct virtqueue *vq = hvb->hinting_vq;
 	struct scatterlist sg;
-	int err = 0, unused;
+	int err, unused;
 
 	mutex_lock(&hvb->balloon_lock);
 	sg_init_one(&sg, hvb->isolated_pages, sizeof(hvb->isolated_pages[0]) *
 		    PAGE_HINTING_MAX_PAGES);
-	err = virtqueue_add_outbuf(vq, &sg, 1, hvb, GFP_KERNEL);
-	if (!err)
-		virtqueue_kick(hvb->hinting_vq);
+	/* We should always be able to add these buffers to an empty queue. */
+	virtqueue_add_outbuf(vq, &sg, 1, hvb, GFP_KERNEL);
+	err = virtqueue_kick(hvb->hinting_vq);
+
 	wait_event(hvb->acked, virtqueue_get_buf(vq, &unused));
 	mutex_unlock(&hvb->balloon_lock);
+
 	return err;
 }
 

@@ -904,7 +904,7 @@ compaction_capture(struct capture_control *capc, struct page *page,
 inline void __free_one_page(struct page *page,
 		unsigned long pfn,
 		struct zone *zone, unsigned int order,
-		int migratetype, bool hint)
+		int migratetype, bool needs_hint)
 {
 	unsigned long combined_pfn;
 	unsigned long uninitialized_var(buddy_pfn);
@@ -1007,7 +1007,7 @@ done_merging:
 				migratetype);
 	else
 		add_to_free_area(page, &zone->free_area[order], migratetype);
-	if (hint)
+	if (needs_hint)
 		page_hinting_enqueue(page, order);
 }
 
@@ -1328,14 +1328,14 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 static void free_one_page(struct zone *zone,
 				struct page *page, unsigned long pfn,
 				unsigned int order,
-				int migratetype, bool hint)
+				int migratetype, bool needs_hint)
 {
 	spin_lock(&zone->lock);
 	if (unlikely(has_isolate_pageblock(zone) ||
 		is_migrate_isolate(migratetype))) {
 		migratetype = get_pfnblock_migratetype(page, pfn);
 	}
-	__free_one_page(page, pfn, zone, order, migratetype, hint);
+	__free_one_page(page, pfn, zone, order, migratetype, needs_hint);
 	spin_unlock(&zone->lock);
 }
 
