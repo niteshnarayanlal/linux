@@ -176,8 +176,12 @@ static void release_isolated_pages(struct list_head *pages)
 
 	list_for_each_entry_safe(page, next, pages, lru) {
 		zone_idx = page_zonenum(page);
-		zone = page_zone(page);
 		bitnr = pfn_to_bit(page, zone_idx);
+		if (!bitnr) {
+			printk("\nERR:bitnr:%lu\n", bitnr);
+			continue;
+		}
+		zone = page_zone(page);
 		order = page_private(page);
 		set_page_private(page, 0);
 		mt = get_pageblock_migratetype(page);
