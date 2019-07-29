@@ -12,13 +12,15 @@
  * driver to page hinting.
  * @hint_pages:		Callback which reports batch of isolated pages
  *			synchornously to the host.
+ * @sg:			scatterlist to hold the isolated pages to be hinted.
  * @max_pages:		Maxmimum pages that are going to be hinted to the host
  *			at a time of granularity >= PAGE_HINTING_MIN_ORDER.
  * @hinting_work:	work object to process page hinting rqeuests.
  * @refcnt:		Reference counter to keep track of the usage.
  */
 struct page_hinting_config {
-	void (*hint_pages)(struct list_head *batch);
+	void (*hint_pages)(struct page_hinting_config *phconf, unsigned int num_hints);
+	struct scatterlist *sg;
 	int max_pages;
 	struct work_struct hinting_work;
 	atomic_t refcnt;

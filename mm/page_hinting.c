@@ -12,6 +12,7 @@
 #include <linux/slab.h>
 #include <linux/page_hinting.h>
 #include <linux/kvm_host.h>
+#include <linux/scatterlist.h>
 
 /*
  * struct zone_free_area - For a single zone across NUMA nodes, it holds the
@@ -49,6 +50,7 @@ void zone_free_area_cleanup(int nr_zones)
 
 	for (zone_idx = 0; zone_idx < nr_zones; zone_idx++) {
 		bitmap_free(free_area[zone_idx].bitmap);
+		free_area[zone_idx].bitmap = NULL;
 		free_area[zone_idx].base_pfn = 0;
 		free_area[zone_idx].end_pfn = 0;
 		free_area[zone_idx].nbits = 0;
@@ -116,16 +118,26 @@ static int zone_free_area_init(void)
 
 int page_hinting_enable(struct page_hinting_config *conf)
 {
-	int ret = -EBUSY;
+	int ret = 0;
 
 	/* Check if someone is already using */
 	if (phconf) 
-		return ret;
+		return -EBUSY;
 
+	/* Prevent any race condition between multiple */
 	mutex_lock(&page_hinting_mutex);
+
+	/* Allocate scatterlist to hold isolated pages */
+	conf->sg = kcalloc(conf->max_pages, sizeof(*conf->sg), GFP_KERNEL);
+	if (!conf->sg) {
+		mutex_unlock(&page_hinting_mutex);
+		return -ENOMEM;
+	}
+
 	/* Initialize the zone_free_area fields for each zone */
 	ret = zone_free_area_init();
 	if (ret < 0) {
+		kfree(conf->sg);
 		mutex_unlock(&page_hinting_mutex);
 		return ret;
 	}
@@ -134,7 +146,7 @@ int page_hinting_enable(struct page_hinting_config *conf)
 	INIT_WORK(&phconf->hinting_work, page_hinting_wq);
 	mutex_unlock(&page_hinting_mutex);
 
-	return ret;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(page_hinting_enable);
 
@@ -142,6 +154,10 @@ void page_hinting_disable(void)
 {
 	/* Cancel any pending hinting request */
 	cancel_work_sync(&phconf->hinting_work);
+
+	kfree(phconf->sg);
+	phconf->sg = NULL;
+
 	/* Avoid tracking any new free page in the bitmap */
 	phconf = NULL;
 	/* Cleanup the bitmaps and old tracking data */
@@ -160,27 +176,22 @@ static inline unsigned long pfn_to_bit(struct page *page, int zone_idx)
 }
 
 /*
- * release_isolated_pages - returns the isolated pages back to the buddy.
- * @pages:	List of isolated pages.
+ * release_isolated_pages - Returns isolated pages back to the buddy. 
+ * @count:	indicates the actual number of pages which are isolated.
  *
- * This function fetches migratetype, order and other information from the
- * pages in the list and put the page back to the zone from where it has been
- * removed.
+ * This function fetches migratetype, order and other information from the pages
+ * in the list and put the page back to the zone from where it has been removed.
  */
-static void release_isolated_pages(struct list_head *pages)
+static void release_isolated_pages(int count)
 {
-	int mt, zone_idx, order;
-	struct page *page, *next;
-	unsigned long bitnr;
+	struct page *page;
 	struct zone *zone;
+	int mt, order, i;
 
-	list_for_each_entry_safe(page, next, pages, lru) {
-		zone_idx = page_zonenum(page);
-		bitnr = pfn_to_bit(page, zone_idx);
-		if (!bitnr) {
-			printk("\nERR:bitnr:%lu\n", bitnr);
-			continue;
-		}
+	lockdep_assert_held(&zone->lock);
+	printk("\nReleasing %d isolated pages\n", count);
+	for (i = 0; i < count; i++) {
+		page = sg_page(phconf->sg);
 		zone = page_zone(page);
 		order = page_private(page);
 		set_page_private(page, 0);
@@ -192,10 +203,10 @@ static void release_isolated_pages(struct list_head *pages)
         	        set_pcppage_migratetype(page, mt);
 		}
 */
-		list_del(&page->lru);
 		__free_one_page(page, page_to_pfn(page), zone,
 				order, mt, false);
-	}
+		phconf->sg++;
+	} 
 }
 
 static void bitmap_set_bit(struct page *page, int zone_idx)
@@ -232,6 +243,8 @@ static void scan_zone_free_area(int zone_idx)
 	struct page *page;
 	struct zone *zone;
 
+	sg_init_table(phconf->sg, phconf->max_pages);
+
 	nbits = free_area[zone_idx].nbits;
 	for_each_set_bit(setbit, free_area[zone_idx].bitmap, nbits) {
 		page = pfn_to_online_page((setbit << PAGE_HINTING_MIN_ORDER) +
@@ -256,31 +269,44 @@ static void scan_zone_free_area(int zone_idx)
 			 * the pages back to the buddy.
 			 */
 			set_page_private(page, order);
-			list_add_tail(&page->lru, &isolated_pages);
+			printk("\nPFN:%lu isolated order:%d isolated_count:%d\n", page_to_pfn(page), order, isolated_cnt);
+			sg_set_page(&phconf->sg[isolated_cnt], page, PAGE_SIZE << order, 0);
 			isolated_cnt++;
 			if (isolated_cnt == phconf->max_pages) {
 				spin_unlock(&zone->lock);
-				 /* Report isolated pages to the hypervisor */
-				phconf->hint_pages(&isolated_pages);
+				
+				printk("\nsg_end is marked at:%d\n", isolated_cnt - 1);
+				sg_mark_end(&phconf->sg[isolated_cnt - 1]);	
+		       		
+				/* Report isolated pages to the hypervisor */
+				phconf->hint_pages(phconf, isolated_cnt);
+		
 				spin_lock(&zone->lock);
-				 /* Return processed pages back to the buddy */
-				release_isolated_pages(&isolated_pages);
+			       	/* Return processed pages back to the buddy */
+				release_isolated_pages(isolated_cnt);
+
+				sg_init_table(phconf->sg, phconf->max_pages);
 				isolated_cnt = 0;
 			}
 		}
 		spin_unlock(&zone->lock);
 		ret = 0;
 	}
+#if 0	
 	/*
 	 * If isolated pages count does not meet the max_pages threshold, we
 	 * would still prefer to hint them as we have already isolated them.
 	 */
 	if (isolated_cnt) {
-		phconf->hint_pages(&isolated_pages);
+		printk("\n******sg_end is marked at:%d\n", isolated_cnt - 1);
+		sg_mark_end(&phconf->sg[isolated_cnt - 1]);	
+		phconf->hint_pages(phconf, isolated_cnt);
+
 		spin_lock(&zone->lock);
-		release_isolated_pages(&isolated_pages);
+		release_isolated_pages(isolated_cnt);
 		spin_unlock(&zone->lock);
 	}
+#endif
 }
 
 /*
