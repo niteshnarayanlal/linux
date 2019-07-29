@@ -182,31 +182,22 @@ static inline unsigned long pfn_to_bit(struct page *page, int zone_idx)
  * This function fetches migratetype, order and other information from the pages
  * in the list and put the page back to the zone from where it has been removed.
  */
-static void release_isolated_pages(int count)
+static void release_isolated_pages(int count, struct zone *zone)
 {
+	struct scatterlist *sg = phconf->sg;
 	struct page *page;
-	struct zone *zone;
-	int mt, order, i;
+	int mt, order;
 
 	lockdep_assert_held(&zone->lock);
 	printk("\nReleasing %d isolated pages\n", count);
-	for (i = 0; i < count; i++) {
-		page = sg_page(phconf->sg);
-		zone = page_zone(page);
+	do {
+		page = sg_page(sg);
 		order = page_private(page);
 		set_page_private(page, 0);
 		mt = get_pageblock_migratetype(page);
-/* TODO: Do we want to check the following?
-		if (unlikely(has_isolate_pageblock(zone) ||
-			     is_migrate_isolate(mt))) {
-	                mt = get_pfnblock_migratetype(page, pfn);
-        	        set_pcppage_migratetype(page, mt);
-		}
-*/
 		__free_one_page(page, page_to_pfn(page), zone,
 				order, mt, false);
-		phconf->sg++;
-	} 
+	} while (!sg_is_last(sg++));
 }
 
 static void bitmap_set_bit(struct page *page, int zone_idx)
@@ -275,38 +266,35 @@ static void scan_zone_free_area(int zone_idx)
 			if (isolated_cnt == phconf->max_pages) {
 				spin_unlock(&zone->lock);
 				
-				printk("\nsg_end is marked at:%d\n", isolated_cnt - 1);
-				sg_mark_end(&phconf->sg[isolated_cnt - 1]);	
-		       		
 				/* Report isolated pages to the hypervisor */
-				phconf->hint_pages(phconf, isolated_cnt);
+				//phconf->hint_pages(phconf, isolated_cnt);
 		
 				spin_lock(&zone->lock);
 			       	/* Return processed pages back to the buddy */
-				release_isolated_pages(isolated_cnt);
+				release_isolated_pages(isolated_cnt, zone);
 
 				sg_init_table(phconf->sg, phconf->max_pages);
+				printk("\nHinting done\n");
 				isolated_cnt = 0;
 			}
 		}
 		spin_unlock(&zone->lock);
 		ret = 0;
 	}
-#if 0	
 	/*
 	 * If isolated pages count does not meet the max_pages threshold, we
 	 * would still prefer to hint them as we have already isolated them.
 	 */
 	if (isolated_cnt) {
-		printk("\n******sg_end is marked at:%d\n", isolated_cnt - 1);
+		printk("\nsg_end is marked at:%d\n", isolated_cnt - 1);
 		sg_mark_end(&phconf->sg[isolated_cnt - 1]);	
-		phconf->hint_pages(phconf, isolated_cnt);
+//		phconf->hint_pages(phconf, isolated_cnt);
 
 		spin_lock(&zone->lock);
-		release_isolated_pages(isolated_cnt);
+		release_isolated_pages(isolated_cnt, zone);
 		spin_unlock(&zone->lock);
+		printk("\nHinting done\n");
 	}
-#endif
 }
 
 /*
