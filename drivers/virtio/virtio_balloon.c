@@ -116,6 +116,7 @@ struct virtio_balloon {
 	/* To register a shrinker to shrink memory upon memory pressure */
 	struct shrinker shrinker;
 
+	/* To configure page hinting to report isolated pages */
 	struct page_hinting_config page_hinting_conf;
 };
 

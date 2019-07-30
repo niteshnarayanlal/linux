@@ -44,7 +44,7 @@ static struct page_hinting_config *phconf;
  *
  * nr_zones:	number of zones which have been initialized.
  */
-void zone_free_area_cleanup(int nr_zones)
+static void zone_free_area_cleanup(int nr_zones)
 {
 	int zone_idx;
 
@@ -120,7 +120,7 @@ int page_hinting_enable(struct page_hinting_config *conf)
 {
 	int ret = 0;
 
-	/* Check if someone is already using */
+	/* Check if someone is already using  page hinting*/
 	if (phconf) 
 		return -EBUSY;
 
@@ -165,7 +165,6 @@ void page_hinting_disable(void)
 }
 EXPORT_SYMBOL_GPL(page_hinting_disable);
 
-/* TODO: Will it change in some way for sparsemem? */
 static inline unsigned long pfn_to_bit(struct page *page, int zone_idx)
 {
 	unsigned long bitnr;
@@ -177,12 +176,12 @@ static inline unsigned long pfn_to_bit(struct page *page, int zone_idx)
 
 /*
  * release_isolated_pages - Returns isolated pages back to the buddy. 
- * @count:	indicates the actual number of pages which are isolated.
+ * @zone:	zone to which the pages needs to be returned.
  *
  * This function fetches migratetype, order and other information from the pages
  * in the list and put the page back to the zone from where it has been removed.
  */
-static void release_isolated_pages(int count, struct zone *zone)
+static void release_isolated_pages(struct zone *zone)
 {
 	struct scatterlist *sg = phconf->sg;
 	struct page *page;
@@ -269,8 +268,9 @@ static void scan_zone_free_area(int zone_idx)
 		
 				spin_lock(&zone->lock);
 			       	/* Return processed pages back to the buddy */
-				release_isolated_pages(isolated_cnt, zone);
+				release_isolated_pages(zone);
 
+				/* Reset for next reporting */
 				sg_init_table(phconf->sg, phconf->max_pages);
 				isolated_cnt = 0;
 			}
@@ -287,7 +287,7 @@ static void scan_zone_free_area(int zone_idx)
 		phconf->hint_pages(phconf, isolated_cnt);
 
 		spin_lock(&zone->lock);
-		release_isolated_pages(isolated_cnt, zone);
+		release_isolated_pages(zone);
 		spin_unlock(&zone->lock);
 	}
 }
