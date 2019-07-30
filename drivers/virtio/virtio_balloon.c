@@ -170,7 +170,6 @@ void hint_pages(struct page_hinting_config *page_hinting_conf, unsigned int num_
 
         /* We should always be able to add these buffers to an empty queue. */
         virtqueue_add_inbuf(vq, page_hinting_conf->sg, num_hints, vb, GFP_KERNEL);
-	printk("\nKicking the host...\n");
 	virtqueue_kick(vq);
 
         /* When host has read buffer, this completes via balloon_ack */

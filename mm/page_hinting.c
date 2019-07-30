@@ -189,7 +189,6 @@ static void release_isolated_pages(int count, struct zone *zone)
 	int mt, order;
 
 	lockdep_assert_held(&zone->lock);
-	printk("\nReleasing %d isolated pages\n", count);
 	do {
 		page = sg_page(sg);
 		order = page_private(page);
@@ -260,21 +259,19 @@ static void scan_zone_free_area(int zone_idx)
 			 * the pages back to the buddy.
 			 */
 			set_page_private(page, order);
-			printk("\nPFN:%lu isolated order:%d isolated_count:%d\n", page_to_pfn(page), order, isolated_cnt);
 			sg_set_page(&phconf->sg[isolated_cnt], page, PAGE_SIZE << order, 0);
 			isolated_cnt++;
 			if (isolated_cnt == phconf->max_pages) {
 				spin_unlock(&zone->lock);
 				
 				/* Report isolated pages to the hypervisor */
-				//phconf->hint_pages(phconf, isolated_cnt);
+				phconf->hint_pages(phconf, isolated_cnt);
 		
 				spin_lock(&zone->lock);
 			       	/* Return processed pages back to the buddy */
 				release_isolated_pages(isolated_cnt, zone);
 
 				sg_init_table(phconf->sg, phconf->max_pages);
-				printk("\nHinting done\n");
 				isolated_cnt = 0;
 			}
 		}
@@ -286,14 +283,12 @@ static void scan_zone_free_area(int zone_idx)
 	 * would still prefer to hint them as we have already isolated them.
 	 */
 	if (isolated_cnt) {
-		printk("\nsg_end is marked at:%d\n", isolated_cnt - 1);
 		sg_mark_end(&phconf->sg[isolated_cnt - 1]);	
-//		phconf->hint_pages(phconf, isolated_cnt);
+		phconf->hint_pages(phconf, isolated_cnt);
 
 		spin_lock(&zone->lock);
 		release_isolated_pages(isolated_cnt, zone);
 		spin_unlock(&zone->lock);
-		printk("\nHinting done\n");
 	}
 }
 
