@@ -110,13 +110,4 @@ struct virtio_balloon_stat {
 	__virtio64 val;
 } __attribute__((packed));
 
-/*
- * struct isolated_memory- holds the pages which will be reported to the host.
- * @phys_add:	physical address associated with a page.
- * @size:	total size of memory to be reported.
- */
-struct isolated_memory {
-	__virtio64 phys_addr;
-	__virtio64 size;
-};
 #endif /* _LINUX_VIRTIO_BALLOON_H */
