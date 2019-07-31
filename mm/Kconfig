@@ -237,6 +237,11 @@ config COMPACTION
           linux-mm@kvack.org.
 
 #
+# support for free page hinting
+config PAGE_HINTING
+	bool
+
+#
 # support for page migration
 #
 config MIGRATION
