@@ -36,6 +36,8 @@
 #define VIRTIO_BALLOON_F_DEFLATE_ON_OOM	2 /* Deflate balloon on OOM */
 #define VIRTIO_BALLOON_F_FREE_PAGE_HINT	3 /* VQ to report free pages */
 #define VIRTIO_BALLOON_F_PAGE_POISON	4 /* Guest is using page poisoning */
+/* TODO: Find a better name to avoid any confusion with FREE_PAGE_HINT */
+#define VIRTIO_BALLOON_F_HINTING	5 /* Page hinting virtqueue */
 
 /* Size of a PFN in the balloon interface. */
 #define VIRTIO_BALLOON_PFN_SHIFT 12
@@ -108,4 +110,13 @@ struct virtio_balloon_stat {
 	__virtio64 val;
 } __attribute__((packed));
 
+/*
+ * struct isolated_memory- holds the pages which will be reported to the host.
+ * @phys_add:	physical address associated with a page.
+ * @size:	total size of memory to be reported.
+ */
+struct isolated_memory {
+	__virtio64 phys_addr;
+	__virtio64 size;
+};
 #endif /* _LINUX_VIRTIO_BALLOON_H */
