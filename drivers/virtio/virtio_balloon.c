@@ -1026,7 +1026,7 @@ static void virtballoon_remove(struct virtio_device *vdev)
 	}
 
 	if (page_hinting_flag)
-		page_hinting_disable();
+		page_hinting_disable(&vb->page_hinting_conf);
 	remove_common(vb);
 #ifdef CONFIG_BALLOON_COMPACTION
 	if (vb->vb_dev_info.inode)

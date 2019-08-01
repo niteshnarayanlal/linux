@@ -44,7 +44,7 @@ static inline void page_hinting_enqueue(struct page *page, int order)
 	__page_hinting_enqueue(page);
 }
 int page_hinting_enable(struct page_hinting_config *conf);
-void page_hinting_disable(void);
+void page_hinting_disable(struct page_hinting_config *conf);
 #else
 static inline void page_hinting_enqueue(struct page *page, int order)
 {
@@ -55,7 +55,7 @@ static inline int page_hinting_enable(struct page_hinting_config *conf)
 	return -EOPNOTSUPP;
 }
 
-static inline void page_hinting_disable(void)
+static inline void page_hinting_disable(struct page_hinting_config *conf)
 {
 }
 #endif

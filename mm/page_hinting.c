@@ -36,8 +36,7 @@ struct zone_free_area {
 } free_area[MAX_NR_ZONES];
 
 static void page_hinting_wq(struct work_struct *work);
-static DEFINE_MUTEX(page_hinting_mutex);
-static struct page_hinting_config *phconf;
+static struct page_hinting_config __rcu *page_hinting_conf __read_mostly;
 
 /* zone_free_area_cleanup - free and reset the zone_free_area fields only for
  * the zones which have been initialized.
@@ -135,47 +134,50 @@ int page_hinting_enable(struct page_hinting_config *conf)
 {
 	int ret = 0;
 
-	/* Check if someone is already using  page hinting*/
-	if (phconf) 
+	/* check if someone is already using  page hinting*/
+	if (rcu_access_pointer(page_hinting_conf))
 		return -EBUSY;
 
-	/* Prevent any race condition between multiple */
-	mutex_lock(&page_hinting_mutex);
-
-	/* Allocate scatterlist to hold isolated pages */
+	/* allocate scatterlist to hold isolated pages */
 	conf->sg = kcalloc(conf->max_pages, sizeof(*conf->sg), GFP_KERNEL);
 	if (!conf->sg) {
-		mutex_unlock(&page_hinting_mutex);
+		rcu_read_unlock();
 		return -ENOMEM;
 	}
 
-	/* Initialize the zone_free_area fields for each zone */
+	/* initialize the zone_free_area fields for each zone */
 	ret = zone_free_area_init();
 	if (ret < 0) {
 		kfree(conf->sg);
-		mutex_unlock(&page_hinting_mutex);
+		rcu_read_unlock();
 		return ret;
 	}
 
-	phconf = conf;
-	atomic_set(&phconf->refcnt, 0);
-	INIT_WORK(&phconf->hinting_work, page_hinting_wq);
-	mutex_unlock(&page_hinting_mutex);
+	atomic_set(&conf->refcnt, 0);
+	INIT_WORK(&conf->hinting_work, page_hinting_wq);
+
+	/* assign the configuration object provided by the backend */
+	rcu_assign_pointer(page_hinting_conf, conf);
 
 	return 0;
 }
 EXPORT_SYMBOL_GPL(page_hinting_enable);
 
-void page_hinting_disable(void)
+void page_hinting_disable(struct page_hinting_config *phconf)
 {
+	if (rcu_access_pointer(page_hinting_conf) != phconf)
+		return;
+
+	RCU_INIT_POINTER(page_hinting_conf, NULL);
+	synchronize_rcu();
+
 	/* Cancel any pending hinting request */
 	cancel_work_sync(&phconf->hinting_work);
 
+	/* Free the scatterlist used for isolated pages */
 	kfree(phconf->sg);
 	phconf->sg = NULL;
 
-	/* Avoid tracking any new free page in the bitmap */
-	phconf = NULL;
 	/* Cleanup the bitmaps and old tracking data */
 	zone_free_area_cleanup(MAX_NR_ZONES);
 }
@@ -193,11 +195,12 @@ static inline unsigned long pfn_to_bit(struct page *page, int zone_idx)
 /*
  * release_isolated_pages - Returns isolated pages back to the buddy. 
  * @zone:	zone to which the pages needs to be returned.
+ * @phconf:	page hinting configuration object initialized by the backend.
  *
  * This function fetches migratetype, order and other information from the pages
  * in the list and put the page back to the zone from where it has been removed.
  */
-static void release_isolated_pages(struct zone *zone)
+static void release_isolated_pages(struct zone *zone, struct page_hinting_config *phconf)
 {
 	struct scatterlist *sg = phconf->sg;
 	struct page *page;
@@ -236,9 +239,10 @@ static void bitmap_set_bit(struct page *page, int zone_idx)
  * reporting to the host. After which the isolated pages are returned back
  * to the buddy.
  *
+ * @phconf:	page hinting configuration object initialized by the backend.
  * @zone_idx:	zone index for the zone whose bitmap needs to be scanned.
  */
-static void scan_zone_free_area(int zone_idx)
+static void scan_zone_free_area(struct page_hinting_config *phconf, int zone_idx)
 {
 	int order, ret, isolated_cnt = 0;
 	unsigned long setbit, nbits;
@@ -254,7 +258,7 @@ static void scan_zone_free_area(int zone_idx)
 				free_area[zone_idx].base_pfn);
 		if (!page)
 			continue;
-		
+
 		zone = page_zone(page);
 		spin_lock(&zone->lock);
 
@@ -280,7 +284,7 @@ static void scan_zone_free_area(int zone_idx)
 				phconf->hint_pages(phconf, isolated_cnt);
 		
 			       	/* Return processed pages back to the buddy */
-				release_isolated_pages(zone);
+				release_isolated_pages(zone, phconf);
 
 				/* Reset for next reporting */
 				sg_init_table(phconf->sg, phconf->max_pages);
@@ -297,7 +301,7 @@ static void scan_zone_free_area(int zone_idx)
 		sg_mark_end(&phconf->sg[isolated_cnt - 1]);	
 		phconf->hint_pages(phconf, isolated_cnt);
 
-		release_isolated_pages(zone);
+		release_isolated_pages(zone, phconf);
 	}
 }
 
@@ -308,13 +312,15 @@ static void scan_zone_free_area(int zone_idx)
  */
 static void page_hinting_wq(struct work_struct *work)
 {
+	struct page_hinting_config *phconf =
+                container_of(work, struct page_hinting_config, hinting_work);
 	int zone_idx, free_pages;
 
 	atomic_inc(&phconf->refcnt);
 	for (zone_idx = 0; zone_idx < MAX_NR_ZONES; zone_idx++) {
 		free_pages = atomic_read(&free_area[zone_idx].free_pages);
 		if (free_pages >= phconf->max_pages)
-			scan_zone_free_area(zone_idx);
+			scan_zone_free_area(phconf, zone_idx);
 	}
 	/*
 	 * We have processed all the zone bitmaps, we can process new page
@@ -331,12 +337,15 @@ static void page_hinting_wq(struct work_struct *work)
  */
 void __page_hinting_enqueue(struct page *page)
 {
+	struct page_hinting_config *phconf;
 	int zone_idx;
 
+	rcu_read_lock();
 	/*
 	 * We should not process the page as the page hinting is not
-	 * yet properly setup by the backend.
+	 * yet properly setup or disabled by the backend.
 	 */
+	phconf = rcu_dereference(page_hinting_conf);
 	if (!phconf)
 		return;
 
@@ -350,4 +359,6 @@ void __page_hinting_enqueue(struct page *page)
 	if (!atomic_read(&phconf->refcnt) &&
 	    atomic_read(&free_area[zone_idx].free_pages) >= phconf->max_pages)
 		schedule_work(&phconf->hinting_work);
+
+	rcu_read_unlock();
 }
