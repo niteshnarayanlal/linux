@@ -58,10 +58,34 @@ static void zone_free_area_cleanup(int nr_zones)
 	}
 }
 
+static int zone_bitmap_alloc(int zone_idx)
+{
+	unsigned long bitmap_size;
+	unsigned long pages;
+	
+	pages = free_area[zone_idx].end_pfn - free_area[zone_idx].base_pfn;
+	bitmap_size = (pages >> PAGE_HINTING_MIN_ORDER) + 1;
+
+	/* Continue to other zones with free pages */
+	if (!bitmap_size)
+		return 0;
+
+	free_area[zone_idx].bitmap = bitmap_zalloc(bitmap_size, GFP_KERNEL);
+	if (!free_area[zone_idx].bitmap)
+		return -ENOMEM;
+
+	free_area[zone_idx].nbits = bitmap_size;
+
+	return 0;
+}
+
+/* zone_free_area_init - Initializes struct zone_free_area fields and allocates
+ * bitmap for each zone.
+ */
 static int zone_free_area_init(void)
 {
 	struct zone *zone;
-	int zone_idx;
+	int zone_idx, ret;
 
 	for_each_populated_zone(zone) {
 		zone_idx = zone_idx(zone);
@@ -91,27 +115,18 @@ static int zone_free_area_init(void)
 	}
 
 	for (zone_idx = 0; zone_idx < MAX_NR_ZONES; zone_idx++) {
-		unsigned long bitmap_size;
-		unsigned long pages;
-		
-		pages = free_area[zone_idx].end_pfn -
-				free_area[zone_idx].base_pfn;
-		bitmap_size = (pages >> PAGE_HINTING_MIN_ORDER) + 1;
 
-		if (!bitmap_size)
-			continue;
-		free_area[zone_idx].bitmap = bitmap_zalloc(bitmap_size,
-							   GFP_KERNEL);
-		if (!free_area[zone_idx].bitmap) {
+		ret = zone_bitmap_alloc(zone_idx);
+		if (ret < 0) {
 			/* 
 			 * VM is probably running low in memory we should not
-			 * enable page hinting at this time.
+			 * enable page hinting for any zone at this time.
 			 */
 			zone_free_area_cleanup(zone_idx);
-			return -ENOMEM;
+			return ret;
 		}
-		free_area[zone_idx].nbits = bitmap_size;
 	}
+
 
 	return 0;
 }
@@ -143,6 +158,7 @@ int page_hinting_enable(struct page_hinting_config *conf)
 	}
 
 	phconf = conf;
+	atomic_set(&phconf->refcnt, 0);
 	INIT_WORK(&phconf->hinting_work, page_hinting_wq);
 	mutex_unlock(&page_hinting_mutex);
 
@@ -187,14 +203,12 @@ static void release_isolated_pages(struct zone *zone)
 	struct page *page;
 	int mt, order;
 
-	lockdep_assert_held(&zone->lock);
 	do {
 		page = sg_page(sg);
 		order = page_private(page);
 		set_page_private(page, 0);
 		mt = get_pageblock_migratetype(page);
-		__free_one_page(page, page_to_pfn(page), zone,
-				order, mt, false);
+		free_one_page(zone, page, page_to_pfn(page), order, mt, false);
 	} while (!sg_is_last(sg++));
 }
 
@@ -251,6 +265,7 @@ static void scan_zone_free_area(int zone_idx)
 		}
 		clear_bit(setbit, free_area[zone_idx].bitmap);
 		atomic_dec(&free_area[zone_idx].free_pages);
+		spin_unlock(&zone->lock);
 
 		if (ret) {
 			/*
@@ -261,12 +276,9 @@ static void scan_zone_free_area(int zone_idx)
 			sg_set_page(&phconf->sg[isolated_cnt], page, PAGE_SIZE << order, 0);
 			isolated_cnt++;
 			if (isolated_cnt == phconf->max_pages) {
-				spin_unlock(&zone->lock);
-				
 				/* Report isolated pages to the hypervisor */
 				phconf->hint_pages(phconf, isolated_cnt);
 		
-				spin_lock(&zone->lock);
 			       	/* Return processed pages back to the buddy */
 				release_isolated_pages(zone);
 
@@ -275,7 +287,6 @@ static void scan_zone_free_area(int zone_idx)
 				isolated_cnt = 0;
 			}
 		}
-		spin_unlock(&zone->lock);
 		ret = 0;
 	}
 	/*
@@ -286,9 +297,7 @@ static void scan_zone_free_area(int zone_idx)
 		sg_mark_end(&phconf->sg[isolated_cnt - 1]);	
 		phconf->hint_pages(phconf, isolated_cnt);
 
-		spin_lock(&zone->lock);
 		release_isolated_pages(zone);
-		spin_unlock(&zone->lock);
 	}
 }
 
@@ -340,6 +349,5 @@ void __page_hinting_enqueue(struct page *page)
 	 */
 	if (!atomic_read(&phconf->refcnt) &&
 	    atomic_read(&free_area[zone_idx].free_pages) >= phconf->max_pages)
-		queue_work_on(smp_processor_id(), system_wq,
-			      &phconf->hinting_work);
+		schedule_work(&phconf->hinting_work);
 }

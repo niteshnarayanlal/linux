@@ -901,7 +901,7 @@ compaction_capture(struct capture_control *capc, struct page *page,
  * -- nyc
  */
 
-inline void __free_one_page(struct page *page,
+static inline void __free_one_page(struct page *page,
 		unsigned long pfn,
 		struct zone *zone, unsigned int order,
 		int migratetype, bool needs_hint)
@@ -1325,7 +1325,7 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 	spin_unlock(&zone->lock);
 }
 
-static void free_one_page(struct zone *zone,
+void free_one_page(struct zone *zone,
 				struct page *page, unsigned long pfn,
 				unsigned int order,
 				int migratetype, bool needs_hint)

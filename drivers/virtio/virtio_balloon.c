@@ -128,7 +128,7 @@ static struct virtio_device_id id_table[] = {
 };
 
 bool page_hinting_flag = true;
-module_param(page_hinting_flag, bool, 0444);
+module_param(page_hinting_flag, bool, 0644);
 MODULE_PARM_DESC(page_hinting_flag, "Enable page hinting");
 
 
@@ -1025,7 +1025,7 @@ static void virtballoon_remove(struct virtio_device *vdev)
 		destroy_workqueue(vb->balloon_wq);
 	}
 
-	if (!page_hinting_flag)
+	if (page_hinting_flag)
 		page_hinting_disable();
 	remove_common(vb);
 #ifdef CONFIG_BALLOON_COMPACTION

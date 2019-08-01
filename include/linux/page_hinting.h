@@ -16,7 +16,7 @@
  * @max_pages:		Maxmimum pages that are going to be hinted to the host
  *			at a time of granularity >= PAGE_HINTING_MIN_ORDER.
  * @hinting_work:	work object to process page hinting rqeuests.
- * @refcnt:		Reference counter to keep track of the usage.
+ * @refcnt:		Track if page hinting is under processing.
  */
 struct page_hinting_config {
 	void (*hint_pages)(struct page_hinting_config *phconf, unsigned int num_hints);
@@ -28,9 +28,10 @@ struct page_hinting_config {
 
 void __page_hinting_enqueue(struct page *page);
 extern int __isolate_free_page(struct page *page, unsigned int order);
-extern void __free_one_page(struct page *page, unsigned long pfn,
-			    struct zone *zone, unsigned int order,
-			    int migratetype, bool hint);
+extern void free_one_page(struct zone *zone,
+			  struct page *page, unsigned long pfn,
+			  unsigned int order,
+			  int migratetype, bool needs_hint);
 #ifdef CONFIG_PAGE_HINTING
 /*
  * page_hinting_enqueue - Checks the eligibility of the freed page based on
