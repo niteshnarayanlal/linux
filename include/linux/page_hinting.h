@@ -28,11 +28,8 @@ struct page_hinting_config {
 };
 
 void __page_hinting_enqueue(struct page *page);
-extern int __isolate_free_page(struct page *page, unsigned int order);
-extern void free_one_page(struct zone *zone,
-			  struct page *page, unsigned long pfn,
-			  unsigned int order,
-			  int migratetype, bool needs_hint);
+void __release_hinted_page(struct zone *zone, struct page *page);
+
 #ifdef CONFIG_PAGE_HINTING
 /*
  * page_hinting_enqueue - Checks the eligibility of the freed page based on

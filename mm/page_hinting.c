@@ -13,6 +13,7 @@
 #include <linux/page_hinting.h>
 #include <linux/kvm_host.h>
 #include <linux/scatterlist.h>
+#include "internal.h"
 
 /*
  * struct zone_free_area - For a single zone across NUMA nodes, it holds the
@@ -191,28 +192,16 @@ static inline unsigned long pfn_to_bit(struct page *page, int zone_idx)
 	return bitnr;
 }
 
-/*
- * release_isolated_pages - Returns isolated pages back to the buddy.
- * @zone:	zone to which the pages needs to be returned.
- * @phconf:	page hinting configuration object initialized by the backend.
- *
- * This function fetches migratetype, order and other information from the pages
- * in the list and put the page back to the zone from where it has been removed.
- */
-static void release_isolated_pages(struct zone *zone,
+static void release_hinted_pages(struct zone *zone,
 				   struct page_hinting_config *phconf)
 {
 	struct scatterlist *sg = phconf->sg;
-	struct page *page;
-	int mt, order;
 
+	spin_lock(&zone->lock);
 	do {
-		page = sg_page(sg);
-		order = page_private(page);
-		set_page_private(page, 0);
-		mt = get_pageblock_migratetype(page);
-		free_one_page(zone, page, page_to_pfn(page), order, mt, false);
+		__release_hinted_page(zone, sg_page(sg));
 	} while (!sg_is_last(sg++));
+	spin_unlock(&zone->lock);
 }
 
 static void bitmap_set_bit(struct page *page, int zone_idx)
@@ -245,7 +234,7 @@ static void bitmap_set_bit(struct page *page, int zone_idx)
 static void scan_zone_free_area(struct page_hinting_config *phconf,
 				int zone_idx)
 {
-	int order, ret, isolated_cnt = 0;
+	int order, ret, mt, isolated_cnt = 0;
 	unsigned long setbit, nbits;
 	LIST_HEAD(isolated_pages);
 	struct page *page;
@@ -265,6 +254,7 @@ static void scan_zone_free_area(struct page_hinting_config *phconf,
 
 		if (PageBuddy(page) && page_private(page) >=
 		    PAGE_HINTING_MIN_ORDER) {
+			mt = get_pcppage_migratetype(page);
 			order = page_private(page);
 			ret = __isolate_free_page(page, order);
 		}
@@ -274,9 +264,10 @@ static void scan_zone_free_area(struct page_hinting_config *phconf,
 
 		if (ret) {
 			/*
-			 * Restoring page order to use it while releasing
-			 * the pages back to the buddy.
+			 * Restoring page order and migratetype to use it while
+			 * releasing the pages back to the buddy.
 			 */
+			set_pcppage_migratetype(page, mt);
 			set_page_private(page, order);
 			sg_set_page(&phconf->sg[isolated_cnt], page,
 				    PAGE_SIZE << order, 0);
@@ -286,7 +277,7 @@ static void scan_zone_free_area(struct page_hinting_config *phconf,
 				phconf->hint_pages(phconf, isolated_cnt);
 
 				/* Return processed pages back to the buddy */
-				release_isolated_pages(zone, phconf);
+				release_hinted_pages(zone, phconf);
 
 				/* Reset for next reporting */
 				sg_init_table(phconf->sg, phconf->max_pages);
@@ -303,7 +294,7 @@ static void scan_zone_free_area(struct page_hinting_config *phconf,
 		sg_mark_end(&phconf->sg[isolated_cnt - 1]);
 		phconf->hint_pages(phconf, isolated_cnt);
 
-		release_isolated_pages(zone, phconf);
+		release_hinted_pages(zone, phconf);
 	}
 }
 
