@@ -31,9 +31,9 @@ struct zone_free_area {
 	unsigned long end_pfn;
 	atomic_t free_pages;
 	unsigned long nbits;
-} free_area[MAX_NR_ZONES];
+};
 
-static void page_hinting_wq(struct work_struct *work);
+static struct zone_free_area free_area[MAX_NR_ZONES];
 static struct page_hinting_config __rcu *page_hinting_conf __read_mostly;
 
 static inline unsigned long pfn_to_bit(struct page *page, int zone_idx)
@@ -45,14 +45,14 @@ static inline unsigned long pfn_to_bit(struct page *page, int zone_idx)
 	return bitnr;
 }
 
-static void release_isolated_page(struct zone *zone,
+static void return_isolated_page(struct zone *zone,
 				  struct page_hinting_config *phconf)
 {
 	struct scatterlist *sg = phconf->sg;
 
 	spin_lock(&zone->lock);
 	do {
-		__release_isolated_page(zone, sg_page(sg));
+		__return_isolated_page(zone, sg_page(sg));
 	} while (!sg_is_last(sg++));
 	spin_unlock(&zone->lock);
 }
@@ -85,15 +85,14 @@ static void bitmap_set_bit(struct page *page, int zone_idx)
 static void scan_zone_free_area(struct page_hinting_config *phconf,
 				int zone_idx)
 {
-	int order, ret, mt, isolated_cnt = 0;
+	int order, mt, isolated_cnt = 0, ret = 0;
 	unsigned long setbit, nbits;
-	LIST_HEAD(isolated_pages);
 	struct page *page;
 	struct zone *zone;
 
 	sg_init_table(phconf->sg, phconf->max_pages);
-
 	nbits = free_area[zone_idx].nbits;
+
 	for_each_set_bit(setbit, free_area[zone_idx].bitmap, nbits) {
 		page = pfn_to_online_page((setbit << PAGE_HINTING_MIN_ORDER) +
 				free_area[zone_idx].base_pfn);
@@ -109,14 +108,15 @@ static void scan_zone_free_area(struct page_hinting_config *phconf,
 			order = page_private(page);
 			ret = __isolate_free_page(page, order);
 		}
+		/* page has been scanned, adjust its bit and counter */
 		clear_bit(setbit, free_area[zone_idx].bitmap);
 		atomic_dec(&free_area[zone_idx].free_pages);
 		spin_unlock(&zone->lock);
 
 		if (ret) {
 			/*
-			 * Restoring page order and migratetype to use it while
-			 * releasing the pages back to the buddy.
+			 * Restoring page order and migratetype for reuse while
+			 * releasing the pages back to the buddy
 			 */
 			set_pageblock_migratetype(page, mt);
 			set_page_private(page, order);
@@ -128,14 +128,14 @@ static void scan_zone_free_area(struct page_hinting_config *phconf,
 				phconf->hint_pages(phconf, isolated_cnt);
 
 				/* Return processed pages back to the buddy */
-				release_isolated_page(zone, phconf);
+				return_isolated_page(zone, phconf);
 
 				/* Reset for next reporting */
 				sg_init_table(phconf->sg, phconf->max_pages);
 				isolated_cnt = 0;
 			}
+			ret = 0;
 		}
-		ret = 0;
 	}
 	/*
 	 * If the number of solated pages does not meet the max_pages
@@ -146,14 +146,14 @@ static void scan_zone_free_area(struct page_hinting_config *phconf,
 		sg_mark_end(&phconf->sg[isolated_cnt - 1]);
 		phconf->hint_pages(phconf, isolated_cnt);
 
-		release_isolated_page(zone, phconf);
+		return_isolated_page(zone, phconf);
 	}
 }
 
 /**
  * page_hinting_wq - checks the number of free_pages in all the zones and
- * invokes a request to scan the respective bitmap for the zone which has
- * free_pages >= the threshold specified by the backend.
+ * invokes a request to scan the respective bitmap if free_pages reaches or
+ * exceeds the threshold specified by the backend.
  */
 static void page_hinting_wq(struct work_struct *work)
 {
@@ -185,8 +185,8 @@ void __page_hinting_enqueue(struct page *page)
 
 	rcu_read_lock();
 	/*
-	 * We should not process this page because either page hinting is not
-	 * yet properly setup or it has been disabled by the backend.
+	 * We should not process this page if either page hinting is not
+	 * yet enabled or it has been disabled by the backend.
 	 */
 	phconf = rcu_dereference(page_hinting_conf);
 	if (!phconf)
@@ -219,8 +219,8 @@ static void zone_free_area_cleanup(int nr_zones)
 	for (zone_idx = 0; zone_idx < nr_zones; zone_idx++) {
 		bitmap_free(free_area[zone_idx].bitmap);
 		free_area[zone_idx].bitmap = NULL;
-		free_area[zone_idx].base_pfn = 0;
-		free_area[zone_idx].end_pfn = 0;
+		free_area[zone_idx].base_pfn = -1;
+		free_area[zone_idx].end_pfn = -1;
 		free_area[zone_idx].nbits = 0;
 		atomic_set(&free_area[zone_idx].free_pages, 0);
 	}

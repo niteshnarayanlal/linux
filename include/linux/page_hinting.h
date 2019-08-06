@@ -28,7 +28,7 @@ struct page_hinting_config {
 };
 
 void __page_hinting_enqueue(struct page *page);
-void __release_isolated_page(struct zone *zone, struct page *page);
+void __return_isolated_page(struct zone *zone, struct page *page);
 void set_pageblock_migratetype(struct page *page, int migratetype);
 
 /**

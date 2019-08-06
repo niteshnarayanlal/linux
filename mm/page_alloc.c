@@ -2201,11 +2201,11 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 
 #ifdef CONFIG_PAGE_HINTING
 /**
- * release_isolated_page - returns a hinted page back to the buddy.
+ * return_isolated_page - returns a hinted page back to the buddy.
  * @zone: zone from where the page was isolated.
  * @page: page which will be returned.
  */
-void __release_isolated_page(struct zone *zone, struct page *page)
+void __return_isolated_page(struct zone *zone, struct page *page)
 {
 	unsigned int order, mt;
 	unsigned long pfn;
@@ -2216,10 +2216,8 @@ void __release_isolated_page(struct zone *zone, struct page *page)
 	mt = get_pageblock_migratetype(page);
 	pfn = page_to_pfn(page);
 
-	if (unlikely(has_isolate_pageblock(zone) || is_migrate_isolate(mt))) {
+	if (unlikely(has_isolate_pageblock(zone) || is_migrate_isolate(mt)))
 		mt = get_pfnblock_migratetype(page, pfn);
-		set_pcppage_migratetype(page, mt);
-	}
 
 	order = page_private(page);
 	set_page_private(page, 0);
