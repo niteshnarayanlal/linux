@@ -37,7 +37,8 @@ struct zone_free_area {
 } free_area[MAX_NR_ZONES];
 
 static void page_hinting_wq(struct work_struct *work);
-static struct page_hinting_config __rcu *page_hinting_conf __read_mostly;
+//static struct page_hinting_config __rcu *page_hinting_conf __read_mostly;
+static struct page_hinting_config *page_hinting_conf;
 
 /* zone_free_area_cleanup - free and reset the zone_free_area fields only for
  * the zones which have been initialized.
@@ -135,13 +136,13 @@ int page_hinting_enable(struct page_hinting_config *conf)
 	int ret = 0;
 
 	/* check if someone is already using  page hinting*/
-	if (rcu_access_pointer(page_hinting_conf))
+//	if (rcu_access_pointer(page_hinting_conf))
+	if (page_hinting_conf)
 		return -EBUSY;
 
 	/* allocate scatterlist to hold isolated pages */
 	conf->sg = kcalloc(conf->max_pages, sizeof(*conf->sg), GFP_KERNEL);
 	if (!conf->sg) {
-		rcu_read_unlock();
 		return -ENOMEM;
 	}
 
@@ -149,7 +150,6 @@ int page_hinting_enable(struct page_hinting_config *conf)
 	ret = zone_free_area_init();
 	if (ret < 0) {
 		kfree(conf->sg);
-		rcu_read_unlock();
 		return ret;
 	}
 
@@ -157,7 +157,8 @@ int page_hinting_enable(struct page_hinting_config *conf)
 	INIT_WORK(&conf->hinting_work, page_hinting_wq);
 
 	/* assign the configuration object provided by the backend */
-	rcu_assign_pointer(page_hinting_conf, conf);
+//	rcu_assign_pointer(page_hinting_conf, conf);
+	page_hinting_conf = conf;
 
 	return 0;
 }
@@ -165,11 +166,12 @@ EXPORT_SYMBOL_GPL(page_hinting_enable);
 
 void page_hinting_disable(struct page_hinting_config *phconf)
 {
-	if (rcu_access_pointer(page_hinting_conf) != phconf)
-		return;
+//	if (rcu_access_pointer(page_hinting_conf) != phconf)
+//		return;
 
-	RCU_INIT_POINTER(page_hinting_conf, NULL);
-	synchronize_rcu();
+	page_hinting_conf = NULL;
+//	RCU_INIT_POINTER(page_hinting_conf, NULL);
+//	synchronize_rcu();
 
 	/* Cancel any pending hinting request */
 	cancel_work_sync(&phconf->hinting_work);
@@ -254,7 +256,7 @@ static void scan_zone_free_area(struct page_hinting_config *phconf,
 
 		if (PageBuddy(page) && page_private(page) >=
 		    PAGE_HINTING_MIN_ORDER) {
-			mt = get_pcppage_migratetype(page);
+			mt = get_pageblock_migratetype(page);
 			order = page_private(page);
 			ret = __isolate_free_page(page, order);
 		}
@@ -267,7 +269,7 @@ static void scan_zone_free_area(struct page_hinting_config *phconf,
 			 * Restoring page order and migratetype to use it while
 			 * releasing the pages back to the buddy.
 			 */
-			set_pcppage_migratetype(page, mt);
+			set_pageblock_migratetype(page, mt);
 			set_page_private(page, order);
 			sg_set_page(&phconf->sg[isolated_cnt], page,
 				    PAGE_SIZE << order, 0);
@@ -333,12 +335,13 @@ void __page_hinting_enqueue(struct page *page)
 	struct page_hinting_config *phconf;
 	int zone_idx;
 
-	rcu_read_lock();
+//	rcu_read_lock();
 	/*
 	 * We should not process the page as the page hinting is not
 	 * yet properly setup or disabled by the backend.
 	 */
-	phconf = rcu_dereference(page_hinting_conf);
+//	phconf = rcu_dereference(page_hinting_conf);
+	phconf = page_hinting_conf;
 	if (!phconf)
 		return;
 
@@ -353,5 +356,5 @@ void __page_hinting_enqueue(struct page *page)
 	    atomic_read(&free_area[zone_idx].free_pages) >= phconf->max_pages)
 		schedule_work(&phconf->hinting_work);
 
-	rcu_read_unlock();
+//	rcu_read_unlock();
 }

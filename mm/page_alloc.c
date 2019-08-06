@@ -2194,18 +2194,18 @@ void __release_hinted_page(struct zone *zone, struct page *page)
 	/* zone lock should be held when this function is called */
 	lockdep_assert_held(&zone->lock);
 
-	mt = get_pcppage_migratetype(page);
+	mt = get_pageblock_migratetype(page);
 	pfn = page_to_pfn(page);
 
 	if (unlikely(has_isolate_pageblock(zone) || is_migrate_isolate(mt))) {
 		mt = get_pfnblock_migratetype(page, pfn);
-		set_pcppage_migratetype(page, mt);
+		set_pageblock_migratetype(page, mt);
 	}
 
 	order = page_private(page);
 	set_page_private(page, 0);
 
-	__free_one_page(page, pfn, zone, order, mt, true);
+	__free_one_page(page, pfn, zone, order, mt, false);
 }
 #endif /* CONFIG_PAGE_HINTING */
 
