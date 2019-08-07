@@ -35,6 +35,7 @@ struct zone_free_area {
 
 static struct zone_free_area free_area[MAX_NR_ZONES];
 static struct page_hinting_config __rcu *page_hinting_conf __read_mostly;
+static DEFINE_MUTEX(page_hinting_mutex);
 
 static inline unsigned long pfn_to_bit(struct page *page, int zone_idx)
 {
@@ -161,7 +162,6 @@ static void page_hinting_wq(struct work_struct *work)
 		container_of(work, struct page_hinting_config, hinting_work);
 	int zone_idx, free_pages;
 
-	atomic_inc(&phconf->refcnt);
 	for (zone_idx = 0; zone_idx < MAX_NR_ZONES; zone_idx++) {
 		free_pages = atomic_read(&free_area[zone_idx].free_pages);
 		if (free_pages >= phconf->max_pages)
@@ -171,7 +171,7 @@ static void page_hinting_wq(struct work_struct *work)
 	 * We have processed all the zone bitmaps, we can process new page
 	 * hinting request now.
 	 */
-	atomic_dec(&phconf->refcnt);
+	atomic_set(&phconf->refcnt, 0);
 }
 
 /**
@@ -199,8 +199,8 @@ void __page_hinting_enqueue(struct page *page)
 	 * We should not enqueue a job if a previously enqueued hinting work is
 	 * in progress or we don't have enough free pages in the zone.
 	 */
-	if (!atomic_read(&phconf->refcnt) &&
-	    atomic_read(&free_area[zone_idx].free_pages) >= phconf->max_pages)
+	if (atomic_read(&free_area[zone_idx].free_pages) >= phconf->max_pages
+	    && !atomic_cmpxchg(&phconf->refcnt, 0, 1))
 		schedule_work(&phconf->hinting_work);
 
 	rcu_read_unlock();
@@ -303,11 +303,11 @@ void page_hinting_disable(struct page_hinting_config *phconf)
 	if (rcu_access_pointer(page_hinting_conf) != phconf)
 		return;
 
-	RCU_INIT_POINTER(page_hinting_conf, NULL);
-	synchronize_rcu();
-
 	/* Cancel any pending hinting request */
 	cancel_work_sync(&phconf->hinting_work);
+
+	RCU_INIT_POINTER(page_hinting_conf, NULL);
+	synchronize_rcu();
 
 	/* Free the scatterlist used for isolated pages */
 	kfree(phconf->sg);
@@ -322,20 +322,27 @@ int page_hinting_enable(struct page_hinting_config *conf)
 {
 	int ret = 0;
 
+	/* prevent race between different multiple enablers */
+	mutex_lock(&page_hinting_mutex);
+
 	/* check if someone is already using  page hinting*/
-	if (rcu_access_pointer(page_hinting_conf))
-		return -EBUSY;
+	if (rcu_access_pointer(page_hinting_conf)) {
+		ret = -EBUSY;
+		goto out;
+	}
 
 	/* allocate scatterlist to hold isolated pages */
 	conf->sg = kcalloc(conf->max_pages, sizeof(*conf->sg), GFP_KERNEL);
-	if (!conf->sg)
-		return -ENOMEM;
+	if (!conf->sg) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
 	/* initialize the zone_free_area fields for each zone */
 	ret = zone_free_area_init();
 	if (ret < 0) {
 		kfree(conf->sg);
-		return ret;
+		goto out;
 	}
 
 	atomic_set(&conf->refcnt, 0);
@@ -344,6 +351,8 @@ int page_hinting_enable(struct page_hinting_config *conf)
 	/* assign the configuration object provided by the backend */
 	rcu_assign_pointer(page_hinting_conf, conf);
 
-	return 0;
+out:
+	mutex_unlock(&page_hinting_mutex);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(page_hinting_enable);
