@@ -250,7 +250,7 @@ static DEFINE_MUTEX(page_reporting_mutex);
 
 void page_reporting_shutdown(struct page_reporting_dev_info *phdev)
 {
-	mutex_lock(page_reporting_mutex);
+	mutex_lock(&page_reporting_mutex);
 
 	if (rcu_access_pointer(ph_dev_info) == phdev) {
 		/* Disable page reporting notification */
@@ -266,7 +266,7 @@ void page_reporting_shutdown(struct page_reporting_dev_info *phdev)
 		phdev->sg = NULL;
 	}
 
-	mutex_unlock(page_reporting_mutex);
+	mutex_unlock(&page_reporting_mutex);
 }
 EXPORT_SYMBOL_GPL(page_reporting_shutdown);
 
@@ -275,7 +275,7 @@ int page_reporting_startup(struct page_reporting_dev_info *phdev)
 	struct zone *zone;
 	int err = 0;
 
-	mutex_lock(page_reporting_mutex);
+	mutex_lock(&page_reporting_mutex);
 
 	/* nothing to do if already in use */
 	if (rcu_access_pointer(ph_dev_info)) {
@@ -305,7 +305,7 @@ int page_reporting_startup(struct page_reporting_dev_info *phdev)
 	/* enable page reporting notification */
 	static_key_slow_inc(&page_reporting_notify_enabled);
 err_out:
-	mutex_unlock(page_reporting_mutex);
+	mutex_unlock(&page_reporting_mutex);
 
 	return err;
 }
