@@ -68,7 +68,7 @@
 #include <linux/lockdep.h>
 #include <linux/nmi.h>
 #include <linux/psi.h>
-#include <linux/page_hinting.h>
+#include <linux/page_reporting.h>
 
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
@@ -1008,7 +1008,7 @@ done_merging:
 	else
 		add_to_free_area(page, &zone->free_area[order], migratetype);
 	if (needs_hint)
-		page_hinting_enqueue(page, order);
+		page_reporting_enqueue(page, order);
 }
 
 /*
@@ -2199,7 +2199,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 	return NULL;
 }
 
-#ifdef CONFIG_PAGE_HINTING
+#ifdef CONFIG_PAGE_REPORTING
 /**
  * return_isolated_page - returns a hinted page back to the buddy.
  * @zone: zone from where the page was isolated.
@@ -2224,7 +2224,7 @@ void __return_isolated_page(struct zone *zone, struct page *page)
 
 	__free_one_page(page, pfn, zone, order, mt, false);
 }
-#endif /* CONFIG_PAGE_HINTING */
+#endif /* CONFIG_PAGE_REPORTING */
 
 /*
  * This array describes the order lists are fallen back to when

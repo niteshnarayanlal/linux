@@ -20,7 +20,7 @@
 #include <linux/magic.h>
 #include <linux/pseudo_fs.h>
 #include <linux/magic.h>
-#include <linux/page_hinting.h>
+#include <linux/page_reporting.h>
 
 /*
  * Balloon device works in 4K page units.  So each page is pointed to by
@@ -48,7 +48,7 @@ enum virtio_balloon_vq {
 	VIRTIO_BALLOON_VQ_DEFLATE,
 	VIRTIO_BALLOON_VQ_STATS,
 	VIRTIO_BALLOON_VQ_FREE_PAGE,
-	VIRTIO_BALLOON_VQ_HINTING,
+	VIRTIO_BALLOON_VQ_REPORTING,
 	VIRTIO_BALLOON_VQ_MAX
 };
 
@@ -59,7 +59,7 @@ enum virtio_balloon_config_read {
 struct virtio_balloon {
 	struct virtio_device *vdev;
 	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *free_page_vq,
-			 *hinting_vq;
+			 *reporting_vq;
 
 	/* Balloon's own wq for cpu-intensive work items */
 	struct workqueue_struct *balloon_wq;
@@ -118,8 +118,8 @@ struct virtio_balloon {
 	/* To register a shrinker to shrink memory upon memory pressure */
 	struct shrinker shrinker;
 
-	/* To configure page hinting to report isolated pages */
-	struct page_hinting_config page_hinting_conf;
+	/* To configure page reporting to report isolated pages */
+	struct page_reporting_config page_reporting_conf;
 };
 
 static struct virtio_device_id id_table[] = {
@@ -127,9 +127,9 @@ static struct virtio_device_id id_table[] = {
 	{ 0 },
 };
 
-bool page_hinting_flag = true;
-module_param(page_hinting_flag, bool, 0644);
-MODULE_PARM_DESC(page_hinting_flag, "Enable page hinting");
+bool page_reporting_flag = true;
+module_param(page_reporting_flag, bool, 0644);
+MODULE_PARM_DESC(page_reporting_flag, "Enable page reporting");
 
 static u32 page_to_balloon_pfn(struct page *page)
 {
@@ -163,19 +163,19 @@ static void tell_host(struct virtio_balloon *vb, struct virtqueue *vq)
 
 }
 
-void virtballoon_hint_pages(struct page_hinting_config *page_hinting_conf,
-			    unsigned int num_hints)
+void virtballoon_report_pages(struct page_reporting_config *page_reporting_conf,
+			    unsigned int num_pages)
 {
-	struct virtio_balloon *vb = container_of(page_hinting_conf,
+	struct virtio_balloon *vb = container_of(page_reporting_conf,
 						 struct virtio_balloon,
-						 page_hinting_conf);
-	struct virtqueue *vq = vb->hinting_vq;
+						 page_reporting_conf);
+	struct virtqueue *vq = vb->reporting_vq;
 	int err, unused;
 
 	/* We should always be able to add these buffers to an empty queue. */
-	err = virtqueue_add_inbuf(vq, page_hinting_conf->sg, num_hints, vb,
+	err = virtqueue_add_inbuf(vq, page_reporting_conf->sg, num_pages, vb,
 				  GFP_NOWAIT);
-	/* We should not hint if the guest is low on memory */
+	/* We should not report if the guest is low on memory */
 	if (unlikely(err))
 		return;
 	virtqueue_kick(vq);
@@ -184,19 +184,19 @@ void virtballoon_hint_pages(struct page_hinting_config *page_hinting_conf,
 	wait_event(vb->acked, virtqueue_get_buf(vq, &unused));
 }
 
-static void virtballoon_page_hinting_init(struct virtio_balloon *vb)
+static void virtballoon_page_reporting_init(struct virtio_balloon *vb)
 {
 	struct device *dev = &vb->vdev->dev;
 	int err;
 
-	vb->page_hinting_conf.hint_pages = virtballoon_hint_pages;
-	vb->page_hinting_conf.max_pages = PAGE_HINTING_MAX_PAGES;
-	err = page_hinting_enable(&vb->page_hinting_conf);
+	vb->page_reporting_conf.report = virtballoon_report_pages;
+	vb->page_reporting_conf.max_pages = PAGE_REPORTING_MAX_PAGES;
+	err = page_reporting_enable(&vb->page_reporting_conf);
 	if (err < 0) {
-		dev_err(dev, "Failed to enable page-hinting, err = %d\n", err);
-		page_hinting_flag = false;
-		vb->page_hinting_conf.hint_pages = NULL;
-		vb->page_hinting_conf.max_pages = 0;
+		dev_err(dev, "Failed to enable page-reporting, err = %d\n", err);
+		page_reporting_flag = false;
+		vb->page_reporting_conf.report = NULL;
+		vb->page_reporting_conf.max_pages = 0;
 		return;
 	}
 }
@@ -525,7 +525,7 @@ static int init_vqs(struct virtio_balloon *vb)
 	names[VIRTIO_BALLOON_VQ_DEFLATE] = "deflate";
 	names[VIRTIO_BALLOON_VQ_STATS] = NULL;
 	names[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
-	names[VIRTIO_BALLOON_VQ_HINTING] = NULL;
+	names[VIRTIO_BALLOON_VQ_REPORTING] = NULL;
 
 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_STATS_VQ)) {
 		names[VIRTIO_BALLOON_VQ_STATS] = "stats";
@@ -537,17 +537,17 @@ static int init_vqs(struct virtio_balloon *vb)
 		callbacks[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
 	}
 
-	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING)) {
-		names[VIRTIO_BALLOON_VQ_HINTING] = "hinting_vq";
-		callbacks[VIRTIO_BALLOON_VQ_HINTING] = balloon_ack;
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_REPORTING)) {
+		names[VIRTIO_BALLOON_VQ_REPORTING] = "reporting_vq";
+		callbacks[VIRTIO_BALLOON_VQ_REPORTING] = balloon_ack;
 	}
 	err = vb->vdev->config->find_vqs(vb->vdev, VIRTIO_BALLOON_VQ_MAX,
 					 vqs, callbacks, names, NULL, NULL);
 	if (err)
 		return err;
 
-	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING))
-		vb->hinting_vq = vqs[VIRTIO_BALLOON_VQ_HINTING];
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_REPORTING))
+		vb->reporting_vq = vqs[VIRTIO_BALLOON_VQ_REPORTING];
 
 	vb->inflate_vq = vqs[VIRTIO_BALLOON_VQ_INFLATE];
 	vb->deflate_vq = vqs[VIRTIO_BALLOON_VQ_DEFLATE];
@@ -981,9 +981,9 @@ static int virtballoon_probe(struct virtio_device *vdev)
 		if (err)
 			goto out_del_balloon_wq;
 	}
-	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_HINTING) &&
-	    page_hinting_flag)
-		virtballoon_page_hinting_init(vb);
+	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_REPORTING) &&
+	    page_reporting_flag)
+		virtballoon_page_reporting_init(vb);
 	virtio_device_ready(vdev);
 
 	if (towards_target(vb))
@@ -1031,8 +1031,8 @@ static void virtballoon_remove(struct virtio_device *vdev)
 		destroy_workqueue(vb->balloon_wq);
 	}
 
-	if (page_hinting_flag)
-		page_hinting_disable(&vb->page_hinting_conf);
+	if (page_reporting_flag)
+		page_reporting_disable(&vb->page_reporting_conf);
 	remove_common(vb);
 #ifdef CONFIG_BALLOON_COMPACTION
 	if (vb->vb_dev_info.inode)
@@ -1089,7 +1089,7 @@ static unsigned int features[] = {
 	VIRTIO_BALLOON_F_DEFLATE_ON_OOM,
 	VIRTIO_BALLOON_F_FREE_PAGE_HINT,
 	VIRTIO_BALLOON_F_PAGE_POISON,
-	VIRTIO_BALLOON_F_HINTING,
+	VIRTIO_BALLOON_F_REPORTING,
 };
 
 static struct virtio_driver virtio_balloon_driver = {
