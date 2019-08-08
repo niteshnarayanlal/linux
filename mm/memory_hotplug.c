@@ -1622,6 +1622,7 @@ static int __ref __offline_pages(unsigned long start_pfn,
 	if (!populated_zone(zone)) {
 		zone_pcp_reset(zone);
 		build_all_zonelists(NULL);
+		page_reporting_reset(zone);
 	} else
 		zone_pcp_update(zone);
 
