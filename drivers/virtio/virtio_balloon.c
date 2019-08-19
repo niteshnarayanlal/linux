@@ -19,6 +19,7 @@
 #include <linux/mount.h>
 #include <linux/magic.h>
 #include <linux/pseudo_fs.h>
+#include <linux/page_reporting.h>
 
 /*
  * Balloon device works in 4K page units.  So each page is pointed to by
@@ -46,6 +47,7 @@ enum virtio_balloon_vq {
 	VIRTIO_BALLOON_VQ_DEFLATE,
 	VIRTIO_BALLOON_VQ_STATS,
 	VIRTIO_BALLOON_VQ_FREE_PAGE,
+	VIRTIO_BALLOON_VQ_REPORTING,
 	VIRTIO_BALLOON_VQ_MAX
 };
 
@@ -55,7 +57,8 @@ enum virtio_balloon_config_read {
 
 struct virtio_balloon {
 	struct virtio_device *vdev;
-	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *free_page_vq;
+	struct virtqueue *inflate_vq, *deflate_vq, *stats_vq, *free_page_vq,
+			 *reporting_vq;
 
 	/* Balloon's own wq for cpu-intensive work items */
 	struct workqueue_struct *balloon_wq;
@@ -113,12 +116,19 @@ struct virtio_balloon {
 
 	/* To register a shrinker to shrink memory upon memory pressure */
 	struct shrinker shrinker;
+
+	/* To configure page reporting to report isolated pages */
+	struct page_reporting_config page_reporting_conf;
 };
 
 static struct virtio_device_id id_table[] = {
 	{ VIRTIO_ID_BALLOON, VIRTIO_DEV_ANY_ID },
 	{ 0 },
 };
+
+bool page_reporting_flag = true;
+module_param(page_reporting_flag, bool, 0644);
+MODULE_PARM_DESC(page_reporting_flag, "Enable page reporting");
 
 static u32 page_to_balloon_pfn(struct page *page)
 {
@@ -150,6 +160,44 @@ static void tell_host(struct virtio_balloon *vb, struct virtqueue *vq)
 	/* When host has read buffer, this completes via balloon_ack */
 	wait_event(vb->acked, virtqueue_get_buf(vq, &len));
 
+}
+
+void virtballoon_report_pages(struct page_reporting_config *page_reporting_conf,
+			      unsigned int num_pages)
+{
+	struct virtio_balloon *vb = container_of(page_reporting_conf,
+						 struct virtio_balloon,
+						 page_reporting_conf);
+	struct virtqueue *vq = vb->reporting_vq;
+	int err, unused;
+
+	/* We should always be able to add these buffers to an empty queue. */
+	err = virtqueue_add_inbuf(vq, page_reporting_conf->sg, num_pages, vb,
+				  GFP_NOWAIT);
+	/* We should not report if the guest is low on memory */
+	if (unlikely(err))
+		return;
+	virtqueue_kick(vq);
+
+	/* When host has read buffer, this completes via balloon_ack */
+	wait_event(vb->acked, virtqueue_get_buf(vq, &unused));
+}
+
+static void virtballoon_page_reporting_setup(struct virtio_balloon *vb)
+{
+	struct device *dev = &vb->vdev->dev;
+	int err;
+
+	vb->page_reporting_conf.report = virtballoon_report_pages;
+	vb->page_reporting_conf.max_pages = PAGE_REPORTING_MAX_PAGES;
+	err = page_reporting_enable(&vb->page_reporting_conf);
+	if (err < 0) {
+		dev_err(dev, "Failed to enable reporting, err = %d\n", err);
+		page_reporting_flag = false;
+		vb->page_reporting_conf.report = NULL;
+		vb->page_reporting_conf.max_pages = 0;
+		return;
+	}
 }
 
 static void set_page_pfns(struct virtio_balloon *vb,
@@ -476,6 +524,7 @@ static int init_vqs(struct virtio_balloon *vb)
 	names[VIRTIO_BALLOON_VQ_DEFLATE] = "deflate";
 	names[VIRTIO_BALLOON_VQ_STATS] = NULL;
 	names[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
+	names[VIRTIO_BALLOON_VQ_REPORTING] = NULL;
 
 	if (virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_STATS_VQ)) {
 		names[VIRTIO_BALLOON_VQ_STATS] = "stats";
@@ -487,10 +536,19 @@ static int init_vqs(struct virtio_balloon *vb)
 		callbacks[VIRTIO_BALLOON_VQ_FREE_PAGE] = NULL;
 	}
 
+	if (page_reporting_flag &&
+	    virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_REPORTING)) {
+		names[VIRTIO_BALLOON_VQ_REPORTING] = "reporting_vq";
+		callbacks[VIRTIO_BALLOON_VQ_REPORTING] = balloon_ack;
+	}
 	err = vb->vdev->config->find_vqs(vb->vdev, VIRTIO_BALLOON_VQ_MAX,
 					 vqs, callbacks, names, NULL, NULL);
 	if (err)
 		return err;
+
+	if (page_reporting_flag &&
+	    virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_REPORTING))
+		vb->reporting_vq = vqs[VIRTIO_BALLOON_VQ_REPORTING];
 
 	vb->inflate_vq = vqs[VIRTIO_BALLOON_VQ_INFLATE];
 	vb->deflate_vq = vqs[VIRTIO_BALLOON_VQ_DEFLATE];
@@ -924,6 +982,9 @@ static int virtballoon_probe(struct virtio_device *vdev)
 		if (err)
 			goto out_del_balloon_wq;
 	}
+	if (page_reporting_flag &&
+	    virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_REPORTING))
+		virtballoon_page_reporting_setup(vb);
 	virtio_device_ready(vdev);
 
 	if (towards_target(vb))
@@ -971,6 +1032,9 @@ static void virtballoon_remove(struct virtio_device *vdev)
 		destroy_workqueue(vb->balloon_wq);
 	}
 
+	if (page_reporting_flag &&
+	    virtio_has_feature(vb->vdev, VIRTIO_BALLOON_F_REPORTING))
+		page_reporting_disable(&vb->page_reporting_conf);
 	remove_common(vb);
 #ifdef CONFIG_BALLOON_COMPACTION
 	if (vb->vb_dev_info.inode)
@@ -1027,6 +1091,7 @@ static unsigned int features[] = {
 	VIRTIO_BALLOON_F_DEFLATE_ON_OOM,
 	VIRTIO_BALLOON_F_FREE_PAGE_HINT,
 	VIRTIO_BALLOON_F_PAGE_POISON,
+	VIRTIO_BALLOON_F_REPORTING,
 };
 
 static struct virtio_driver virtio_balloon_driver = {
