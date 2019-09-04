@@ -299,6 +299,10 @@ int page_reporting_startup(struct page_reporting_dev_info *phdev)
 	struct zone *zone;
 	int err = 0;
 
+	/* No point in enabling this if it cannot handle any pages */
+	if (!phdev->capacity)
+		return -EINVAL;
+
 	mutex_lock(&page_reporting_mutex);
 
 	/* nothing to do if already in use */
