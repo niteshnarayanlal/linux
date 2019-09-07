@@ -68,6 +68,7 @@
 #include <linux/lockdep.h>
 #include <linux/nmi.h>
 #include <linux/psi.h>
+#include <linux/page_reporting.h>
 
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
@@ -915,7 +916,7 @@ buddy_merge_likely(unsigned long pfn, unsigned long buddy_pfn,
 static inline void __free_one_page(struct page *page,
 		unsigned long pfn,
 		struct zone *zone, unsigned int order,
-		int migratetype)
+		int migratetype, bool reported)
 {
 	struct capture_control *capc = task_capc(zone);
 	unsigned long uninitialized_var(buddy_pfn);
@@ -990,11 +991,20 @@ continue_merging:
 done_merging:
 	set_page_order(page, order);
 
-	if (is_shuffle_order(order) ? shuffle_pick_tail() :
-	    buddy_merge_likely(pfn, buddy_pfn, page, order))
+	if (reported ||
+	    (is_shuffle_order(order) ? shuffle_pick_tail() :
+	     buddy_merge_likely(pfn, buddy_pfn, page, order)))
 		add_to_free_list_tail(page, zone, order, migratetype);
 	else
 		add_to_free_list(page, zone, order, migratetype);
+
+	/*
+	 * No need to notify on a reported page as the total count of
+	 * unreported pages will not have increased since we have essentially
+	 * merged the reported page with one or more unreported pages.
+	 */
+	if (!reported)
+		page_reporting_notify_free(zone, order);
 }
 
 /*
@@ -1305,7 +1315,7 @@ static void free_pcppages_bulk(struct zone *zone, int count,
 		if (unlikely(isolated_pageblocks))
 			mt = get_pageblock_migratetype(page);
 
-		__free_one_page(page, page_to_pfn(page), zone, 0, mt);
+		__free_one_page(page, page_to_pfn(page), zone, 0, mt, false);
 		trace_mm_page_pcpu_drain(page, 0, mt);
 	}
 	spin_unlock(&zone->lock);
@@ -1321,7 +1331,7 @@ static void free_one_page(struct zone *zone,
 		is_migrate_isolate(migratetype))) {
 		migratetype = get_pfnblock_migratetype(page, pfn);
 	}
-	__free_one_page(page, pfn, zone, order, migratetype);
+	__free_one_page(page, pfn, zone, order, migratetype, false);
 	spin_unlock(&zone->lock);
 }
 
@@ -2182,6 +2192,101 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 
 	return NULL;
 }
+
+#ifdef CONFIG_PAGE_REPORTING
+/**
+ * free_reported_page - Return a now-reported page back where we got it
+ * @page: Page that was reported
+ * @order: Order of the reported page
+ *
+ * This function will pull the migratetype and order information out
+ * of the page and attempt to return it where it found it. If the page
+ * is added to the free list without changes we will mark it as being
+ * reported.
+ */
+void free_reported_page(struct page *page, unsigned int order)
+{
+	struct zone *zone = page_zone(page);
+	unsigned long pfn;
+	unsigned int mt;
+
+	/* zone lock should be held when this function is called */
+	lockdep_assert_held(&zone->lock);
+
+	pfn = page_to_pfn(page);
+	mt = get_pfnblock_migratetype(page, pfn);
+	__free_one_page(page, pfn, zone, order, mt, true);
+
+	/*
+	 * If page was not comingled with another page we can consider
+	 * the result to be "reported" since part of the page hasn't been
+	 * modified, otherwise we would need to report on the new larger
+	 * page.
+	 */
+	if (PageBuddy(page) && page_order(page) == order)
+		add_page_to_reported_list(page, zone, order, mt);
+}
+
+/**
+ * get_unreported_page - Pull an unreported page from the free_list
+ * @zone: Zone to draw pages from
+ * @order: Order to draw pages from
+ * @mt: Migratetype to draw pages from
+ *
+ * This function will obtain a page from the free list. It will start by
+ * attempting to pull from the tail of the free list and if that is already
+ * reported on it will instead pull the head if that is unreported.
+ *
+ * The page will have the migrate type and order stored in the page
+ * metadata. While being processed the page will not be avaialble for
+ * allocation.
+ *
+ * Return: page pointer if raw page found, otherwise NULL
+ */
+struct page *get_unreported_page(struct zone *zone, unsigned int order, int mt)
+{
+	struct list_head *tail = get_unreported_tail(zone, order, mt);
+	struct free_area *area = &(zone->free_area[order]);
+	struct list_head *list = &area->free_list[mt];
+	struct page *page;
+
+	/* zone lock should be held when this function is called */
+	lockdep_assert_held(&zone->lock);
+
+	/* Find a page of the appropriate size in the preferred list */
+	page = list_last_entry(tail, struct page, lru);
+	list_for_each_entry_from_reverse(page, list, lru) {
+		/* If we entered this loop then the "raw" list isn't empty */
+
+		/* If the page is reported try the head of the list */
+		if (PageReported(page)) {
+			page = list_first_entry(list, struct page, lru);
+
+			/*
+			 * If both the head and tail are reported then reset
+			 * the boundary so that we read as an empty list
+			 * next time and bail out.
+			 */
+			if (PageReported(page)) {
+				page_reporting_add_to_boundary(page, mt);
+				break;
+			}
+		}
+
+		del_page_from_free_list(page, zone, order);
+
+		/*
+		 * Page will not be available for allocation while we are
+		 * processing it so update the freepage state.
+		 */
+		__mod_zone_freepage_state(zone, -(1 << order), mt);
+
+		return page;
+	}
+
+	return NULL;
+}
+#endif /* CONFIG_PAGE_REPORTING */
 
 /*
  * This array describes the order lists are fallen back to when
