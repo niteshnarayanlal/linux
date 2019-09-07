@@ -4,7 +4,6 @@
 #include <linux/mm.h>
 #include <linux/init.h>
 #include <linux/mmzone.h>
-#include <linux/random.h>
 #include <linux/moduleparam.h>
 #include "internal.h"
 #include "shuffle.h"
@@ -190,8 +189,7 @@ struct batched_bit_entropy {
 
 static DEFINE_PER_CPU(struct batched_bit_entropy, batched_entropy_bool);
 
-void add_to_free_area_random(struct page *page, struct free_area *area,
-		int migratetype)
+bool __shuffle_pick_tail(void)
 {
 	struct batched_bit_entropy *batch;
 	unsigned long entropy;
@@ -213,8 +211,5 @@ void add_to_free_area_random(struct page *page, struct free_area *area,
 	batch->position = position;
 	entropy = batch->entropy_bool;
 
-	if (1ul & (entropy >> position))
-		add_to_free_area(page, area, migratetype);
-	else
-		add_to_free_area_tail(page, area, migratetype);
+	return 1ul & (entropy >> position);
 }
