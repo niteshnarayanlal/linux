@@ -560,6 +560,9 @@ struct zone {
 	/* Zone statistics */
 	atomic_long_t		vm_stat[NR_VM_ZONE_STAT_ITEMS];
 	atomic_long_t		vm_numa_stat[NR_VM_NUMA_STAT_ITEMS];
+#ifdef CONFIG_PAGE_REPORTING
+	struct zone_reporting_bitmap __rcu *reporting_bitmap;
+#endif
 } ____cacheline_internodealigned_in_smp;
 
 enum pgdat_flags {
@@ -579,6 +582,11 @@ enum pgdat_flags {
 enum zone_flags {
 	ZONE_BOOSTED_WATERMARK,		/* zone recently boosted watermarks.
 					 * Cleared when kswapd is woken.
+					 */
+	ZONE_PAGE_REPORTING_REQUEST,	/* zone which wants to perform page
+					 * reporting as they have enough free
+					 * pages.
+					 * Cleared once the reporting is over.
 					 */
 };
 
