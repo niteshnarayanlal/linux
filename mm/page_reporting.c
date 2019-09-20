@@ -14,9 +14,44 @@
 #include <linux/scatterlist.h>
 #include <linux/page-isolation.h>
 #include "internal.h"
+#include <linux/sysfs.h>
+#include <linux/kobject.h>
 
 static struct page_reporting_config __rcu *page_reporting_conf __read_mostly;
 static DEFINE_MUTEX(page_reporting_mutex);
+
+unsigned long freed, captured, scanned, isolated, reallocated;
+int sys_init_cnt;
+
+#ifdef CONFIG_SYSFS
+#define HINTING_ATTR_RO(_name) \
+		static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
+
+static ssize_t hinting_memory_stats_show(struct kobject *kobj,
+					 struct kobj_attribute *attr,
+					 char *buf)
+{
+	return sprintf(buf, "Freed memory:%lu KB\nCaptured memory:%lu KB\n"
+		       "Scanned memory:%lu KB\nIsolated memory:%lu KB\n"
+		       "Reallocated memory:%lu\n",
+		       freed * 4, captured * 4, scanned * 4,
+		       isolated * 4,
+		       reallocated * 4);
+}
+
+HINTING_ATTR_RO(hinting_memory_stats);
+
+static struct attribute *hinting_attrs[] = {
+	&hinting_memory_stats_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group hinting_attr_group = {
+	.attrs = hinting_attrs,
+	.name = "hinting",
+};
+#endif
+
 
 struct page *get_head_buddy(struct page *page)
 {
@@ -55,8 +90,10 @@ static void bitmap_set_bit(struct page *page,
 
 	/* set bit if it is not already set and is a valid bit */
 	if (rbitmap->bitmap && bitnr < rbitmap->nbits &&
-	    !test_and_set_bit(bitnr, rbitmap->bitmap))
+	    !test_and_set_bit(bitnr, rbitmap->bitmap)) {
+		captured += 1 << page_private(page);
 		atomic_inc(&rbitmap->free_pages);
+	}
 }
 
 static void bitmap_clear_bit(struct page *page,
@@ -69,8 +106,10 @@ static void bitmap_clear_bit(struct page *page,
 
 	/* set bit if it is not already set and is a valid bit */
 	if (rbitmap->bitmap && bitnr < rbitmap->nbits &&
-	    test_and_clear_bit(bitnr, rbitmap->bitmap))
+	    test_and_clear_bit(bitnr, rbitmap->bitmap)) {
+		reallocated += 1 << page_private(page);
 		atomic_dec(&rbitmap->free_pages);
+	}
 }
 
 static int process_free_page(struct page *page,
@@ -87,7 +126,7 @@ static int process_free_page(struct page *page,
 		 * to the buddy.
 		 */
 		set_page_private(page, order);
-
+		isolated += 1 << order;
 		sg_set_page(&phconf->sg[count++], page,
 			    PAGE_SIZE << order, 0);
 	}
@@ -127,6 +166,7 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 			continue;
 		}
 
+		scanned += 1 << page_private(page);
 		spin_lock(&zone->lock);
 
 		/* Ensure page is still free and can be processed */
@@ -221,6 +261,7 @@ void __page_reporting_enqueue(struct page *page)
 	 * We should not process this page if either page reporting is not
 	 * yet completely enabled or it has been disabled by the backend.
 	 */
+	freed += 1 << page_private(page);
 	phconf = rcu_dereference(page_reporting_conf);
 	if (!phconf)
 		goto out;
@@ -422,6 +463,13 @@ int page_reporting_enable(struct page_reporting_config *phconf)
 	/* assign the configuration object provided by the backend */
 	rcu_assign_pointer(page_reporting_conf, phconf);
 
+	if (sys_init_cnt == 0) {
+		int err = sysfs_create_group(mm_kobj, &hinting_attr_group);
+
+		if (err)
+			pr_err("hinting: register sysfs failed\n");
+			sys_init_cnt = 1;
+	}
 out:
 	mutex_unlock(&page_reporting_mutex);
 	return ret;
