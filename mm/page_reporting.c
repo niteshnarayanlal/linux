@@ -18,6 +18,21 @@
 static struct page_reporting_config __rcu *page_reporting_conf __read_mostly;
 static DEFINE_MUTEX(page_reporting_mutex);
 
+struct page *get_head_buddy(struct page *page)
+{
+	unsigned long pfn = page_to_pfn(page);
+	unsigned int order;
+
+	for (order = 0; order < MAX_ORDER; order++) {
+		struct page *head_page = page - (pfn & ((1 << order) - 1));
+
+		if (PageBuddy(head_page) && page_private(head_page) >= order)
+			return head_page;
+	}
+
+	return NULL;
+}
+
 static void return_isolated_page(struct zone *zone,
 				 struct page_reporting_config *phconf)
 {
@@ -42,6 +57,20 @@ static void bitmap_set_bit(struct page *page,
 	if (rbitmap->bitmap && bitnr < rbitmap->nbits &&
 	    !test_and_set_bit(bitnr, rbitmap->bitmap))
 		atomic_inc(&rbitmap->free_pages);
+}
+
+static void bitmap_clear_bit(struct page *page,
+			   struct zone_reporting_bitmap *rbitmap)
+{
+	unsigned long pfn, bitnr = 0;
+
+	pfn = page_to_pfn(page);
+	bitnr = (pfn - rbitmap->base_pfn) >> PAGE_REPORTING_MIN_ORDER;
+
+	/* set bit if it is not already set and is a valid bit */
+	if (rbitmap->bitmap && bitnr < rbitmap->nbits &&
+	    test_and_clear_bit(bitnr, rbitmap->bitmap))
+		atomic_dec(&rbitmap->free_pages);
 }
 
 static int process_free_page(struct page *page,
@@ -102,13 +131,14 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 
 		/* Ensure page is still free and can be processed */
 		if (PageBuddy(page) && !is_migrate_isolate_page(page) &&
-		    page_private(page) >= PAGE_REPORTING_MIN_ORDER)
+		    page_private(page) >= PAGE_REPORTING_MIN_ORDER) {
 			count = process_free_page(page, phconf, count);
-
+			/* Page has been processed, adjust its bit and zone counter */
+			clear_bit(setbit, rbitmap->bitmap);
+			atomic_dec(&rbitmap->free_pages);
+		}
+	
 		spin_unlock(&zone->lock);
-		/* Page has been processed, adjust its bit and zone counter */
-		clear_bit(setbit, rbitmap->bitmap);
-		atomic_dec(&rbitmap->free_pages);
 
 		if (count == phconf->max_pages) {
 			/* Report isolated pages to the hypervisor */
@@ -219,6 +249,27 @@ out:
 	rcu_read_unlock();
 }
 
+/**
+ * __page_reporting_dequeue - clears the bit in the bitmap and decrements the
+ * respective zone's free_page_count.
+ */
+void __page_reporting_dequeue(struct page *page)
+{
+	struct zone_reporting_bitmap *rbitmap;
+	struct zone *zone;
+
+	rcu_read_lock();
+
+	zone = page_zone(page);
+	rbitmap = rcu_dereference(zone->reporting_bitmap);
+	if (!rbitmap)
+		goto out;
+
+	bitmap_clear_bit(page, rbitmap);
+
+out:
+	rcu_read_unlock();
+}
 /**
  * zone_reporting_cleanup - resets the page reporting fields and free the
  * bitmap for all the initialized zones.

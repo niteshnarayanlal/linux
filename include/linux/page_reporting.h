@@ -43,7 +43,9 @@ struct page_reporting_config {
 };
 
 void __page_reporting_enqueue(struct page *page);
+void __page_reporting_dequeue(struct page *page);
 void __return_isolated_page(struct zone *zone, struct page *page);
+struct page *get_head_buddy(struct page *page);
 
 /**
  * page_reporting_enqueue - checks the eligibility of the freed page based on
@@ -58,10 +60,25 @@ static inline void page_reporting_enqueue(struct page *page, int order)
 	__page_reporting_enqueue(page);
 }
 
+static inline void page_reporting_dequeue(struct page *page, int order)
+{
+	struct page *head_buddy = get_head_buddy(page);
+
+	if (!head_buddy)
+		return;
+	if (page_private(head_buddy) < PAGE_REPORTING_MIN_ORDER)
+		return;
+	__page_reporting_dequeue(head_buddy);
+}
+
 int page_reporting_enable(struct page_reporting_config *phconf);
 void page_reporting_disable(struct page_reporting_config *phconf);
 #else
 static inline void page_reporting_enqueue(struct page *page, int order)
+{
+}
+
+static inline void page_reporting_dequeue(struct page *page, int order)
 {
 }
 
