@@ -562,6 +562,9 @@ struct zone {
 	/* Zone statistics */
 	atomic_long_t		vm_stat[NR_VM_ZONE_STAT_ITEMS];
 	atomic_long_t		vm_numa_stat[NR_VM_NUMA_STAT_ITEMS];
+#ifdef CONFIG_PAGE_REPORTING
+	struct zone_reporting_bitmap __rcu *reporting_bitmap;
+#endif
 } ____cacheline_internodealigned_in_smp;
 
 enum pgdat_flags {
