@@ -10,6 +10,9 @@ struct zone_reporting_bitmap {
 	/* Pointer to the bitmap in PAGE_REPORTING_MIN_ORDER granularity */
 	unsigned long *bitmap;
 
+	/* Indicates the bit in the bitmap which has been scanned */
+	unsigned long last_scanned_bit;
+
 	/* Preserved start and end PFN in case they change due to hotplug */
 	unsigned long base_pfn;
 	unsigned long end_pfn;
@@ -37,6 +40,9 @@ struct page_reporting_config {
 
 	/* work object to process page reporting rqeuests */
 	struct work_struct reporting_work;
+
+	/* keeps track of the number of zones trying to report */
+	atomic_t refcnt;
 
 	unsigned long flags;
 };

@@ -43,7 +43,12 @@ static void bitmap_set_bit(struct page *page,
 
 	/* set bit if it is not already set and is a valid bit */
 	if (bitnr < rbitmap->nbits &&
-	    !test_and_set_bit(bitnr, rbitmap->bitmap))
+	    !test_and_set_bit(bitnr, rbitmap->bitmap) &&
+	    bitnr < rbitmap->last_scanned_bit)
+		/*
+		 * Increment free_pages only if the freed page belong to the
+		 * already scanned bitmap section.
+		 */
 		atomic_inc(&rbitmap->free_pages);
 }
 
@@ -92,6 +97,7 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 	sg_init_table(phconf->sg, phconf->max_pages);
 
 	for_each_set_bit(setbit, rbitmap->bitmap, rbitmap->nbits) {
+		rbitmap->last_scanned_bit = setbit;
 		/* Process only if the page is still online */
 		page = pfn_to_online_page((setbit << PAGE_REPORTING_MIN_ORDER) +
 					  rbitmap->base_pfn);
@@ -105,7 +111,6 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 		 */
 		if (!page || !PageBuddy(page)) {
 			clear_bit(setbit, rbitmap->bitmap);
-			atomic_dec(&rbitmap->free_pages);
 			continue;
 		}
 
@@ -119,7 +124,6 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 		spin_unlock(&zone->lock);
 		/* Page has been processed, adjust its bit and zone counter */
 		clear_bit(setbit, rbitmap->bitmap);
-		atomic_dec(&rbitmap->free_pages);
 
 		if (count == phconf->max_pages) {
 			/* Report isolated pages to the hypervisor */
@@ -144,6 +148,9 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 
 		return_isolated_page(zone, phconf);
 	}
+
+	atomic_dec(&phconf->refcnt);
+	rbitmap->last_scanned_bit = rbitmap->nbits;
 }
 
 /**
@@ -156,23 +163,37 @@ static void page_reporting_wq(struct work_struct *work)
 	struct page_reporting_config *phconf =
 		container_of(work, struct page_reporting_config,
 			     reporting_work);
-	struct zone *zone;
+	struct zone *zone = first_online_pgdat()->node_zones;
 	struct zone_reporting_bitmap *rbitmap;
 	int free_pages;
 
-	for_each_populated_zone(zone) {
-		/*
-		 * A newly enqueued/ongoing job will be canceled before
-		 * the rcu protected zone_reporting_bitmap pointer
-		 * object is freed. Hence, it should be safe to access
-		 * it here without a read lock.
-		 */
-		rbitmap = rcu_dereference(zone->reporting_bitmap);
-		free_pages = atomic_read(&rbitmap->free_pages);
+	do {
+		if (populated_zone(zone)) {
+			/*
+			 * A newly enqueued/ongoing job will be canceled before
+			 * the rcu protected zone_reporting_bitmap pointer
+			 * object is freed. Hence, it should be safe to access
+			 * it here without a read lock.
+			 */
+			rbitmap = rcu_dereference(zone->reporting_bitmap);
+			free_pages = atomic_read(&rbitmap->free_pages);
 
-		if (rbitmap && free_pages >= phconf->max_pages)
-			scan_zone_bitmap(phconf, rbitmap, zone);
-	}
+			if (rbitmap && free_pages >= phconf->max_pages) {
+				/*
+				 * All the free_pages for this zone will
+				 * be processed now.
+				 */
+				atomic_set(&rbitmap->free_pages, 0);
+				scan_zone_bitmap(phconf, rbitmap, zone);
+			}
+		}
+		/* Move to the next zone if possible else start over */
+		zone = next_zone(zone) ? : first_online_pgdat()->node_zones;
+		/*
+		 * We should continue checking the zones for possible reporting
+		 * as long as the refcnt has not reached to zero.
+		 */
+	} while (atomic_read(&phconf->refcnt));
 	__clear_bit(PAGE_REPORTING_ACTIVE, &phconf->flags);
 }
 
@@ -204,15 +225,14 @@ void __page_reporting_enqueue(struct page *page)
 
 	/*
 	 * We should not enqueue a job if we don't have enough free pages in
-	 * the zone or if this zone has an ongoing page reporting request.
+	 * the zone.
 	 */
-	if (atomic_read(&rbitmap->free_pages) < phconf->max_pages ||
-	    test_bit(PAGE_REPORTING_ACTIVE, &phconf->flags))
+	if (atomic_read(&rbitmap->free_pages) < phconf->max_pages)
 		goto out;
 
-	__set_bit(PAGE_REPORTING_ACTIVE, &phconf->flags);
-	schedule_work(&phconf->reporting_work);
-
+	atomic_inc(&phconf->refcnt);
+	if (!test_and_set_bit(PAGE_REPORTING_ACTIVE, &phconf->flags))
+		schedule_work(&phconf->reporting_work);
 out:
 	rcu_read_unlock();
 }
@@ -263,6 +283,14 @@ static int zone_bitmap_alloc(struct zone_reporting_bitmap *rbitmap)
 		return -ENOMEM;
 
 	rbitmap->nbits = bitmap_size;
+	/*
+	 * Each zone increments free_pages only if it belongs to a bit position
+	 * which has already been scanned.
+	 * Initially we set the index to the end so that the zone could
+	 * increment free_pages and generate reporting request.
+	 */
+	rbitmap->last_scanned_bit = bitmap_size;
+
 	return 0;
 }
 
