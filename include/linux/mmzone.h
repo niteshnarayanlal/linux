@@ -562,6 +562,17 @@ struct zone {
 	/* Zone statistics */
 	atomic_long_t		vm_stat[NR_VM_ZONE_STAT_ITEMS];
 	atomic_long_t		vm_numa_stat[NR_VM_NUMA_STAT_ITEMS];
+#ifdef CONFIG_PAGE_REPORTING
+	/* Pointer to the bitmap in PAGE_REPORTING_MIN_ORDER granularity */
+	unsigned long *bitmap;
+	/* Preserve start and end PFN in case they change due to hotplug */
+	unsigned long base_pfn;
+	unsigned long end_pfn;
+	/* Free pages of granularity PAGE_REPORTING_MIN_ORDER */
+	atomic_t free_pages;
+	/* Number of bits required in the bitmap */
+	unsigned long nbits;
+#endif
 } ____cacheline_internodealigned_in_smp;
 
 enum pgdat_flags {
