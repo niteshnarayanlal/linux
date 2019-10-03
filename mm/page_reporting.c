@@ -22,12 +22,13 @@ static void return_isolated_page(struct zone *zone,
 				 struct page_reporting_config *phconf)
 {
 	struct scatterlist *sg = phconf->sg;
+	unsigned long flags;
 
-	spin_lock(&zone->lock);
+	spin_lock_irqsave(&zone->lock, flags);
 	do {
 		__return_isolated_page(zone, sg_page(sg));
 	} while (!sg_is_last(sg++));
-	spin_unlock(&zone->lock);
+	spin_unlock_irqrestore(&zone->lock, flags);
 }
 
 static void bitmap_set_bit(struct page *page,
@@ -47,10 +48,13 @@ static void bitmap_set_bit(struct page *page,
 		atomic_inc(&rbitmap->free_pages);
 }
 
-static int process_free_page(struct page *page,
+static int process_free_page(struct page *page, struct zone *zone,
 			     struct page_reporting_config *phconf, int count)
 {
 	int order, ret = 0;
+
+	/* zone lock should be held when this function is called */
+	lockdep_assert_held(&zone->lock);
 
 	order = page_private(page);
 	ret = __isolate_free_page(page, order);
@@ -85,7 +89,7 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 			     struct zone_reporting_bitmap *rbitmap,
 			     struct zone *zone)
 {
-	unsigned long setbit;
+	unsigned long setbit, flags;
 	struct page *page;
 	int count = 0;
 
@@ -109,14 +113,14 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 			continue;
 		}
 
-		spin_lock(&zone->lock);
+		spin_lock_irqsave(&zone->lock, flags);
 
 		/* Ensure page is still free and can be processed */
 		if (PageBuddy(page) && !is_migrate_isolate_page(page) &&
 		    page_private(page) >= PAGE_REPORTING_MIN_ORDER)
-			count = process_free_page(page, phconf, count);
+			count = process_free_page(page, zone, phconf, count);
 
-		spin_unlock(&zone->lock);
+		spin_unlock_irqrestore(&zone->lock, flags);
 		/* Page has been processed, adjust its bit and zone counter */
 		clear_bit(setbit, rbitmap->bitmap);
 		atomic_dec(&rbitmap->free_pages);
@@ -274,6 +278,7 @@ static int zone_bitmap_alloc(struct zone_reporting_bitmap *rbitmap)
  */
 static int zone_reporting_init(void)
 {
+	unsigned long flags;
 	struct zone *zone;
 	int ret = 0;
 
@@ -294,10 +299,10 @@ static int zone_reporting_init(void)
 		 * Preserve start and end PFN values in case they change due
 		 * to memory hotplug.
 		 */
-		spin_lock(&zone->lock);
+		spin_lock_irqsave(&zone->lock, flags);
 		rbitmap->base_pfn = zone->zone_start_pfn;
 		rbitmap->end_pfn = zone_end_pfn(zone);
-		spin_unlock(&zone->lock);
+		spin_unlock_irqrestore(&zone->lock, flags);
 
 		atomic_set(&rbitmap->free_pages, 0);
 
