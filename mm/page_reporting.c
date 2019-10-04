@@ -101,8 +101,12 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 		/* Process only if the page is still online */
 		page = pfn_to_online_page((setbit << PAGE_REPORTING_MIN_ORDER) +
 					  zone->base_pfn);
-		if (!page)
+		if (!page || !PageBuddy(page)) {
+			/* Page has been processed, adjust its bit and zone counter */
+			clear_bit(setbit, zone->bitmap);
+			atomic_dec(&zone->free_pages);
 			continue;
+		}
 
 		spin_lock(&zone->lock);
 
