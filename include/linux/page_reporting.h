@@ -2,8 +2,8 @@
 #ifndef _LINUX_PAGE_REPORTING_H
 #define _LINUX_PAGE_REPORTING_H
 
-#define PAGE_REPORTING_MIN_ORDER		(MAX_ORDER - 2)
-#define PAGE_REPORTING_MAX_PAGES		16
+#define PAGE_REPORTING_MIN_ORDER		pageblock_order
+#define PAGE_REPORTING_MAX_PAGES		32
 
 #ifdef CONFIG_PAGE_REPORTING
 struct zone_reporting_bitmap {

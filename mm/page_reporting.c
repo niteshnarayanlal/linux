@@ -107,7 +107,7 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 		 * by acquiring zone->lock even when the page is already
 		 * reallocated.
 		 */
-		if (!page || !PageBuddy(page)) {
+		if (!page || !PageBuddy(page) || is_migrate_isolate(page)) {
 			clear_bit(setbit, rbitmap->bitmap);
 			atomic_dec(&rbitmap->free_pages);
 			continue;
@@ -115,7 +115,7 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 
 		spin_lock_irqsave(&zone->lock, flags);
 
-		/* Ensure page is still free and can be processed */
+		/* Ensure page is still free and not of type MIGRATE_ISOLATE */
 		if (PageBuddy(page) && !is_migrate_isolate_page(page) &&
 		    page_private(page) >= PAGE_REPORTING_MIN_ORDER)
 			count = process_free_page(page, zone, phconf, count);
