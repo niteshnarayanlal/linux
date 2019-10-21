@@ -24,11 +24,9 @@ static void return_isolated_page(struct zone *zone,
 	struct scatterlist *sg = phconf->sg;
 	unsigned long flags;
 
-	spin_lock_irqsave(&zone->lock, flags);
 	do {
 		__return_isolated_page(zone, sg_page(sg));
 	} while (!sg_is_last(sg++));
-	spin_unlock_irqrestore(&zone->lock, flags);
 }
 
 static void bitmap_set_bit(struct page *page,
@@ -51,24 +49,40 @@ static void bitmap_set_bit(struct page *page,
 static int process_free_page(struct page *page, struct zone *zone,
 			     struct page_reporting_config *phconf, int count)
 {
+	unsigned long mt, start, end;
 	int order, ret = 0;
 
-	/* zone lock should be held when this function is called */
-	lockdep_assert_held(&zone->lock);
+//	order = page_private(page);
+	order = pageblock_order;
+	mt = get_pageblock_migratetype(page);
+//	ret = __isolate_free_page(page, order);
+	start = page_to_pfn(page);
 
-	order = page_private(page);
-	ret = __isolate_free_page(page, order);
+	printk("\nPage reporting requested for order:%d\n", order);
+//	while (order >= pageblock_order) {
+		end = start + (1 << pageblock_order);
+		printk("\nChecking range to be reported start:%lu end:%lu\n", start, end);
+		ret = start_isolate_page_range(start, end, mt, 0);
+		if (ret > 0) {
+			if (!test_pages_isolated(start, end, 0)) {
+				/*
+				 * TODO: Is this really required now?
+				 * Preserving order for reuse while releasing the pages back
+				 * to the buddy.
+				 */
+				printk("\nMarking range to be reported start:%lu end:%lu\n", start, end);
+				set_page_private(page, order);
 
-	if (ret) {
-		/*
-		 * Preserving order for reuse while releasing the pages back
-		 * to the buddy.
-		 */
-		set_page_private(page, order);
-
-		sg_set_page(&phconf->sg[count++], page,
-			    PAGE_SIZE << order, 0);
-	}
+				sg_set_page(&phconf->sg[count++], page,
+					    PAGE_SIZE << order, 0);
+			} else {
+				printk("\nRange can not be reported start:%lu end:%lu\n", start, end);
+				undo_isolate_page_range(start, end, mt);
+			}
+		}
+//		order--;
+//		start = end;
+//	}
 
 	return count;
 }
@@ -89,7 +103,7 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 			     struct zone_reporting_bitmap *rbitmap,
 			     struct zone *zone)
 {
-	unsigned long setbit, flags;
+	unsigned long setbit;
 	struct page *page;
 	int count = 0;
 
@@ -99,33 +113,27 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 		/* Process only if the page is still online */
 		page = pfn_to_online_page((setbit << PAGE_REPORTING_MIN_ORDER) +
 					  rbitmap->base_pfn);
-		/*
-		 * We should process a page retrieved from the bitmap only if:
-		 * 1. Page is still online.
-		 * 2. Page is present in the buddy.
-		 * The latter condition is checked to avoid the overhead caused
-		 * by acquiring zone->lock even when the page is already
-		 * reallocated.
-		 */
-		if (!page || !PageBuddy(page) || is_migrate_isolate(page)) {
+		/* We should process a page only if it is still online */
+		if (!page) {
 			clear_bit(setbit, rbitmap->bitmap);
 			atomic_dec(&rbitmap->free_pages);
 			continue;
 		}
 
-		spin_lock_irqsave(&zone->lock, flags);
+//		spin_lock_irqsave(&zone->lock, flags);
 
 		/* Ensure page is still free and not of type MIGRATE_ISOLATE */
 		if (PageBuddy(page) && !is_migrate_isolate_page(page) &&
 		    page_private(page) >= PAGE_REPORTING_MIN_ORDER)
 			count = process_free_page(page, zone, phconf, count);
 
-		spin_unlock_irqrestore(&zone->lock, flags);
+//		spin_unlock_irqrestore(&zone->lock, flags);
 		/* Page has been processed, adjust its bit and zone counter */
 		clear_bit(setbit, rbitmap->bitmap);
 		atomic_dec(&rbitmap->free_pages);
 
 		if (count == phconf->max_pages) {
+			printk("\nReporting pages...\n");
 			/* Report isolated pages to the hypervisor */
 			phconf->report(phconf, count);
 

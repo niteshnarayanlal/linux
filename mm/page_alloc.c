@@ -2209,18 +2209,16 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 void __return_isolated_page(struct zone *zone, struct page *page)
 {
 	unsigned int order, mt;
-	unsigned long pfn;
+	unsigned long start, end;
 
-	/* zone lock should be held when this function is called */
-	lockdep_assert_held(&zone->lock);
-
-	pfn = page_to_pfn(page);
-	mt = get_pfnblock_migratetype(page, pfn);
+	start = page_to_pfn(page);
+	mt = get_pageblock_migratetype(page);
+	end = start + (1 << pageblock_order);
 
 	order = page_private(page);
 	set_page_private(page, 0);
 
-	__free_one_page(page, pfn, zone, order, mt, false);
+	undo_isolate_page_range(start, end, mt);
 }
 #endif /* CONFIG_PAGE_REPORTING */
 
