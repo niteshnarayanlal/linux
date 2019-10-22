@@ -2212,12 +2212,9 @@ void __return_isolated_page(struct zone *zone, struct page *page)
 	unsigned long start, end;
 
 	start = page_to_pfn(page);
-	mt = get_pageblock_migratetype(page);
-	end = start + (1 << pageblock_order);
-
-	order = page_private(page);
-	set_page_private(page, 0);
-
+	mt = get_pcppage_migratetype(page);
+	printk("\n**__return_isolate_page order:%lu migratetype restored%u page->index:%lu\n", page_private(page), mt, page->index);
+	end = start + (1 << page_private(page));
 	undo_isolate_page_range(start, end, mt);
 }
 #endif /* CONFIG_PAGE_REPORTING */

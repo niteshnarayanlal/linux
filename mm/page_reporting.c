@@ -18,13 +18,45 @@
 static struct page_reporting_config __rcu *page_reporting_conf __read_mostly;
 static DEFINE_MUTEX(page_reporting_mutex);
 
+#include <linux/kobject.h>
+unsigned long freed, captured, scanned, isolated, returned, reported, failed, already_isolated, marked_isolated, trying_to_isolate, isol_failed;
+int sys_init_cnt;
+
+#ifdef CONFIG_SYSFS
+#define HINTING_ATTR_RO(_name) \
+		static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
+
+static ssize_t hinting_memory_stats_show(struct kobject *kobj,
+					 struct kobj_attribute *attr,
+					 char *buf)
+{
+	return sprintf(buf, "Freed memory:%lu KB\nCaptured memory:%lu KB\n"
+		       "Scanned memory:%lu KB\nTrying to isolate memory:%lu KB\nIsolated memory:%lu KB\n"
+		      "Failed memory:%lu KB\nIsolation Failed:%lu KB\nReturned memory:%lu KB\nAlready isolated memory:%lu \nMarked isolated memory:%lu KB\n",
+		       freed, captured, scanned, trying_to_isolate, isolated,
+		       failed, isol_failed, returned, already_isolated, marked_isolated);
+}
+
+HINTING_ATTR_RO(hinting_memory_stats);
+
+static struct attribute *hinting_attrs[] = {
+	&hinting_memory_stats_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group hinting_attr_group = {
+	.attrs = hinting_attrs,
+	.name = "hinting",
+};
+#endif
+
 static void return_isolated_page(struct zone *zone,
 				 struct page_reporting_config *phconf)
 {
 	struct scatterlist *sg = phconf->sg;
-	unsigned long flags;
 
 	do {
+		returned += 1 << page_private(sg_page(sg));
 		__return_isolated_page(zone, sg_page(sg));
 	} while (!sg_is_last(sg++));
 }
@@ -42,8 +74,10 @@ static void bitmap_set_bit(struct page *page,
 
 	/* set bit if it is not already set and is a valid bit */
 	if (bitnr < rbitmap->nbits &&
-	    !test_and_set_bit(bitnr, rbitmap->bitmap))
+	    !test_and_set_bit(bitnr, rbitmap->bitmap)) {
+		captured += (1 << page_private(page));
 		atomic_inc(&rbitmap->free_pages);
+	}
 }
 
 static int process_free_page(struct page *page, struct zone *zone,
@@ -52,38 +86,30 @@ static int process_free_page(struct page *page, struct zone *zone,
 	unsigned long mt, start, end;
 	int order, ret = 0;
 
-//	order = page_private(page);
-	order = pageblock_order;
+	order = page_private(page);
 	mt = get_pageblock_migratetype(page);
-//	ret = __isolate_free_page(page, order);
 	start = page_to_pfn(page);
 
-	printk("\nPage reporting requested for order:%d\n", order);
-//	while (order >= pageblock_order) {
-		end = start + (1 << pageblock_order);
-		printk("\nChecking range to be reported start:%lu end:%lu\n", start, end);
-		ret = start_isolate_page_range(start, end, mt, 0);
-		if (ret > 0) {
-			if (!test_pages_isolated(start, end, 0)) {
-				/*
-				 * TODO: Is this really required now?
-				 * Preserving order for reuse while releasing the pages back
-				 * to the buddy.
-				 */
-				printk("\nMarking range to be reported start:%lu end:%lu\n", start, end);
-				set_page_private(page, order);
-
-				sg_set_page(&phconf->sg[count++], page,
-					    PAGE_SIZE << order, 0);
-			} else {
-				printk("\nRange can not be reported start:%lu end:%lu\n", start, end);
-				undo_isolate_page_range(start, end, mt);
-			}
+	trying_to_isolate += 1 << page_private(page);
+	printk("\nPage reporting requested for order:%d original mt:%ld page->index:%lu\n", order, mt, page->index);
+	end = start + (1 << order);
+	ret = start_isolate_page_range(start, end, mt, 0);
+	if (ret < 0) {
+		printk("\n***************Failed*****************\n");
+		isol_failed += (1 << order);
+	} else {
+		marked_isolated += 1 << page_private(page);
+		if (test_pages_isolated(start, end, 0) != -EBUSY) {
+			//printk("\nMarking range to be reported start:%lu end:%lu return:%d", start, end, ret);
+			isolated += (1 << order);
+			sg_set_page(&phconf->sg[count++], pfn_to_page(start),
+				    PAGE_SIZE << order, 0);
+		} else {
+			//printk("\nRange can not be reported start:%lu end:%lu return:%d\n", start, end, ret);
+			failed += (1 << order);
+			undo_isolate_page_range(start, end, mt);
 		}
-//		order--;
-//		start = end;
-//	}
-
+	}
 	return count;
 }
 
@@ -122,17 +148,21 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 
 //		spin_lock_irqsave(&zone->lock, flags);
 
+		scanned += 1 << page_private(page);
 		/* Ensure page is still free and not of type MIGRATE_ISOLATE */
-		if (PageBuddy(page) && !is_migrate_isolate_page(page) &&
+		if (PageBuddy(page) &&
+				//!is_migrate_isolate_page(page) &&
 		    page_private(page) >= PAGE_REPORTING_MIN_ORDER)
 			count = process_free_page(page, zone, phconf, count);
-
+		else
+			already_isolated += 1 << page_private(page);
 //		spin_unlock_irqrestore(&zone->lock, flags);
 		/* Page has been processed, adjust its bit and zone counter */
 		clear_bit(setbit, rbitmap->bitmap);
 		atomic_dec(&rbitmap->free_pages);
 
-		if (count == phconf->max_pages) {
+		printk("\nChecking for possible reporting count:%d max_pages:%d\n", count, phconf->max_pages);
+		if (count >= phconf->max_pages) {
 			printk("\nReporting pages...\n");
 			/* Report isolated pages to the hypervisor */
 			phconf->report(phconf, count);
@@ -173,6 +203,13 @@ static void page_reporting_wq(struct work_struct *work)
 	int free_pages;
 
 	for_each_populated_zone(zone) {
+		if (sys_init_cnt == 0) {
+			int err = sysfs_create_group(mm_kobj,
+					&hinting_attr_group);
+			if (err)
+				pr_err("hinting: register sysfs failed\n");
+			sys_init_cnt = 1;
+		}
 		/*
 		 * A newly enqueued/ongoing job will be canceled before
 		 * the rcu protected zone_reporting_bitmap pointer
@@ -198,6 +235,7 @@ void __page_reporting_enqueue(struct page *page)
 	struct zone_reporting_bitmap *rbitmap;
 	struct zone *zone;
 
+	freed += (1 << page_private(page));
 	rcu_read_lock();
 	/*
 	 * We should not process this page if either page reporting is not
