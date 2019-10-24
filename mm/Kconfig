@@ -736,4 +736,10 @@ config ARCH_HAS_PTE_SPECIAL
 config ARCH_HAS_HUGEPD
 	bool
 
+# PAGE_REPORTING will allow the guest to report the free pages to the
+# host in fixed chunks as soon as a fixed threshold is reached.
+config PAGE_REPORTING
+       bool
+       def_bool n
+       depends on X86_64
 endmenu
