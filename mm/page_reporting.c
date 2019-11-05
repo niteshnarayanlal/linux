@@ -14,6 +14,11 @@
 #include <linux/scatterlist.h>
 #include "internal.h"
 
+#include <linux/sysfs.h>
+#include <linux/kobject.h>
+
+unsigned long scanning_requests, reporting_requests, extra_reporting_requests, reallocation_requests;
+int sys_init_cnt;
 static struct page_reporting_config __rcu *page_reporting_conf __read_mostly;
 static DEFINE_MUTEX(page_reporting_mutex);
 
@@ -37,6 +42,22 @@ static void return_isolated_page(struct zone *zone,
 		__return_isolated_page(zone, sg_page(sg));
 	} while (!sg_is_last(sg++));
 	spin_unlock(&zone->lock);
+}
+
+static void bitmap_clear_bit(struct page *page,
+			   struct zone *zone)
+{
+	unsigned long pfn, bitnr = 0;
+
+	pfn = page_to_pfn(page);
+	bitnr = (pfn - zone->base_pfn) >> PAGE_REPORTING_MIN_ORDER;
+
+	/* set bit if it is not already set and is a valid bit */
+	if (zone->bitmap && bitnr < zone->nbits &&
+	    test_and_clear_bit(bitnr, zone->bitmap)) {
+		reallocation_requests += 1;
+		atomic_dec(&zone->free_pages);
+	}
 }
 
 static void bitmap_set_bit(struct page *page, struct zone *zone)
@@ -77,6 +98,47 @@ static int process_free_page(struct page *page,
 	return count;
 }
 
+
+
+#ifdef CONFIG_SYSFS
+#define HINTING_ATTR_RO(_name) \
+		static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
+
+static ssize_t hinting_memory_stats_show(struct kobject *kobj,
+					 struct kobj_attribute *attr,
+					 char *buf)
+{
+	return sprintf(buf, "Scaning requests:%lu\nReporting requests:%lu\nExtra Reporting requests:%lu\nReallocation requests:%lu\n",
+		       scanning_requests, reporting_requests, extra_reporting_requests, reallocation_requests);
+}
+
+HINTING_ATTR_RO(hinting_memory_stats);
+
+static struct attribute *hinting_attrs[] = {
+	&hinting_memory_stats_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group hinting_attr_group = {
+	.attrs = hinting_attrs,
+	.name = "hinting",
+};
+#endif
+
+struct page *get_buddy_page(struct page *page)
+{
+	unsigned long pfn = page_to_pfn(page);
+	unsigned int order;
+
+	for (order = 0; order < MAX_ORDER; order++) {
+		struct page *page_head = page - (pfn & ((1 << order) - 1));
+
+		if (PageBuddy(page_head) && page_private(page_head) >= order)
+			return page_head;
+	}
+	return NULL;
+}
+
 /**
  * scan_zone_bitmap - scans the bitmap for the requested zone.
  * @phconf: page reporting configuration object initialized by the backend.
@@ -96,6 +158,7 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 	int count = 0;
 
 	sg_init_table(phconf->sg, phconf->max_pages);
+	scanning_requests += 1;
 
 	for_each_set_bit(setbit, zone->bitmap, zone->nbits) {
 		/* Process only if the page is still online */
@@ -121,6 +184,7 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 		atomic_dec(&zone->free_pages);
 
 		if (count == phconf->max_pages) {
+			reporting_requests += 1;
 			/* Report isolated pages to the hypervisor */
 			phconf->report(phconf, count);
 
@@ -138,6 +202,7 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 	 * isolated them.
 	 */
 	if (count) {
+		extra_reporting_requests += 1;
 		sg_mark_end(&phconf->sg[count - 1]);
 		phconf->report(phconf, count);
 
@@ -157,6 +222,13 @@ static void page_reporting_wq(struct work_struct *work)
 			     reporting_work);
 	struct zone *zone;
 
+	if (sys_init_cnt == 0) {
+		int err = sysfs_create_group(mm_kobj, &hinting_attr_group);
+
+		if (err)
+			pr_err("hinting: register sysfs failed\n");
+		sys_init_cnt = 1;
+	}
 	for_each_populated_zone(zone) {
 		if (atomic_read(&zone->free_pages) >= phconf->max_pages)
 			scan_zone_bitmap(phconf, zone);
@@ -166,6 +238,26 @@ static void page_reporting_wq(struct work_struct *work)
 	 * request now.
 	 */
 	atomic_set(&phconf->refcnt, 0);
+}
+
+void __page_reporting_dequeue(struct page *page)
+{
+	struct page_reporting_config *phconf;
+	struct zone *zone;
+
+	rcu_read_lock();
+	/*
+	 * We should not process this page if either page reporting is not
+	 * yet completely enabled or it has been disabled by the backend.
+	 */
+	phconf = rcu_dereference(page_reporting_conf);
+	if (!phconf)
+		goto out;
+
+	zone = page_zone(page);
+	bitmap_clear_bit(page, zone);
+out:
+	rcu_read_unlock();
 }
 
 /**

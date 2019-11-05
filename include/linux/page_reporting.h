@@ -2,7 +2,8 @@
 #ifndef _LINUX_PAGE_REPORTING_H
 #define _LINUX_PAGE_REPORTING_H
 
-#define PAGE_REPORTING_MIN_ORDER		(MAX_ORDER - 1)
+//#define PAGE_REPORTING_MIN_ORDER		(MAX_ORDER - 1)
+#define PAGE_REPORTING_MIN_ORDER		pageblock_order
 #define PAGE_REPORTING_MAX_PAGES		32
 
 #ifdef CONFIG_PAGE_REPORTING
@@ -30,6 +31,8 @@ struct page_reporting_config {
 void __page_reporting_enqueue(struct page *page);
 void __return_isolated_page(struct zone *zone, struct page *page);
 void set_pageblock_migratetype(struct page *page, int migratetype);
+void __page_reporting_dequeue(struct page *page);
+struct page *get_buddy_page(struct page *page);
 
 /**
  * page_reporting_enqueue - checks the eligibility of the freed page based on
@@ -44,9 +47,22 @@ static inline void page_reporting_enqueue(struct page *page, int order)
 	__page_reporting_enqueue(page);
 }
 
+static inline void page_reporting_dequeue(struct page *page)
+{
+	struct page *buddy_page = get_buddy_page(page);
+	
+	if (page_private(buddy_page) < PAGE_REPORTING_MIN_ORDER)
+		return;
+	__page_reporting_dequeue(page);
+}
+
 int page_reporting_enable(struct page_reporting_config *phconf);
 void page_reporting_disable(struct page_reporting_config *phconf);
 #else
+static inline void page_reporting_dequeue(struct page *page, int order)
+{
+}
+
 static inline void page_reporting_enqueue(struct page *page, int order)
 {
 }
