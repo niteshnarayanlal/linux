@@ -27,15 +27,13 @@ static void return_isolated_page(struct zone *zone,
 				 struct page_reporting_config *phconf)
 {
 	struct scatterlist *sg = phconf->sg;
-	unsigned long start, end;
-	struct page *page;
+	unsigned long flags;
 
+	spin_lock_irqsave(&zone->lock, flags);
 	do {
-		page = sg_page(sg);
-		start = page_to_pfn(page);
-		end = start + (1 << page_private(page));
-		undo_isolate_page_range(start, end, MIGRATE_MOVABLE);
+		__return_isolated_page(zone, sg_page(sg));
 	} while (!sg_is_last(sg++));
+	spin_unlock_irqrestore(&zone->lock, flags);
 }
 
 static void bitmap_set_bit(struct page *page,
@@ -52,37 +50,31 @@ static void bitmap_set_bit(struct page *page,
 		atomic_inc(&rbitmap->free_pages);
 }
 
-static int process_free_page(struct page *page,
+static int process_free_page(struct page *page, struct zone *zone,
 			     struct page_reporting_config *phconf, int count)
 {
 	int ret = 0, mt;
 	unsigned int order;
-	unsigned long start, end;
+
+	/* zone lock should be held when this function is called */
+	lockdep_assert_held(&zone->lock);
 
 	mt = get_pageblock_migratetype(page);
 	order = page_private(page);
-	start = page_to_pfn(page);
-	end = start + (1 << order);
+	ret = __isolate_free_page(page, order);
 
-	/*
-	 * There is a race present here which will happen if the order of the
-	 * page becomes < PAGE_REPORTING_MIN_ORDER before the
-	 * alignment check of start_isolate_page_range.
-	 */
-	if (page_private(page) >= PAGE_REPORTING_MIN_ORDER)
-		ret = start_isolate_page_range(start, end, mt, 0);
+	if (ret) {
+		/*
+		 * Preserving order and migratetype for reuse while
+		 * releasing the pages back to the buddy.
+		 */
+		set_pageblock_migratetype(page, mt);
+		set_page_private(page, order);
 
-	if (ret > 0) {
-		if (test_pages_isolated(start, end, 0) != -EBUSY)
-			sg_set_page(&phconf->sg[count++], page,
-				    PAGE_SIZE << order, 0);
-		else
-			/*
-			 * Some page might have been reallocated in the
-			 * range, undo the changes if that's the case.
-			 */
-			undo_isolate_page_range(start, end, mt);
+		sg_set_page(&phconf->sg[count++], page,
+			    PAGE_SIZE << order, 0);
 	}
+
 
 	return count;
 }
@@ -103,7 +95,7 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 			     struct zone_reporting_bitmap *rbitmap,
 			     struct zone *zone)
 {
-	unsigned long setbit;
+	unsigned long setbit, flags;
 	struct page *page;
 	int count = 0;
 
@@ -113,28 +105,19 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 		/* Process only if the page is still online */
 		page = pfn_to_online_page((setbit << PAGE_REPORTING_MIN_ORDER) +
 					  rbitmap->base_pfn);
-		if (!page) {
+		if (!page || is_migrate_isolate_page(page)) {
 			clear_bit(setbit, rbitmap->bitmap);
 			atomic_dec(&rbitmap->free_pages);
 			continue;
 		}
-		/*
-		 * Skipping MIGRATE_CMA for now to avoid uncessary overhead
-		 * which will be involved in maintaing the migratetype to
-		 * restore the page back to MIGRATE_CMA after it is returned
-		 * from the hypervisor.
-		 */
-		if (is_migrate_cma_page(page) || is_migrate_isolate_page(page))
-			continue;
-		/*
-		 * Prevent unnecessary processing going forward if the page
-		 * is already reallocated.
-		 */
-		if (!PageBuddy(page))
-			continue;
 
-		/* Process free page and adjust its bit and zone counter */
-		count = process_free_page(page, phconf, count);
+		spin_lock_irqsave(&zone->lock, flags);
+		/* Ensure page is still free and can be processed */
+		if (PageBuddy(page) && page_private(page) >=
+		    PAGE_REPORTING_MIN_ORDER)
+			count = process_free_page(page, zone, phconf, count);
+                spin_unlock_irqrestore(&zone->lock, flags);	
+		/* Free page is processed and adjust its bit and zone counter */
 		clear_bit(setbit, rbitmap->bitmap);
 		atomic_dec(&rbitmap->free_pages);
 
