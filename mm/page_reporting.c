@@ -18,6 +18,41 @@
 static struct page_reporting_config __rcu *page_reporting_conf __read_mostly;
 static DEFINE_MUTEX(page_reporting_mutex);
 
+#include <linux/sysfs.h>
+#include <linux/kobject.h>
+
+unsigned long mo1_reporting_requests, mo2_reporting_requests, vm_exits;
+int sys_init_cnt;
+
+#ifdef CONFIG_SYSFS
+#define HINTING_ATTR_RO(_name) \
+		static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
+
+static ssize_t hinting_memory_stats_show(struct kobject *kobj,
+					 struct kobj_attribute *attr,
+					 char *buf)
+{
+	return sprintf(buf, "(MAX_ORDER - 1) Reporting requests:%lu\n(MAX_ORDER - 2) Reporting requests:%lu\nvm_exits:%lu\n",
+		       mo1_reporting_requests, mo2_reporting_requests, vm_exits);
+}
+
+HINTING_ATTR_RO(hinting_memory_stats);
+
+static struct attribute *hinting_attrs[] = {
+	&hinting_memory_stats_attr.attr,
+	NULL,
+};
+
+static const struct attribute_group hinting_attr_group = {
+	.attrs = hinting_attrs,
+	.name = "hinting",
+};
+#endif
+#define for_each_reporting_migratetype_order(_order, _type) \
+	for (_order = MAX_ORDER; _order-- != PAGE_REPORTING_MIN_ORDER;) \
+		for (_type = MIGRATE_TYPES; _type--;) \
+			if (!is_migrate_isolate(_type))
+
 /**
  * return_isolated_page - returns a reported page back to the buddy.
  * @zone: zone from where the page was isolated.
@@ -70,6 +105,10 @@ static int process_free_page(struct page *page, struct zone *zone,
 		 */
 		set_pageblock_migratetype(page, mt);
 		set_page_private(page, order);
+		if (order == (MAX_ORDER - 1))
+			mo1_reporting_requests += 1;
+		else
+			mo2_reporting_requests += 1;
 
 		sg_set_page(&phconf->sg[count++], page,
 			    PAGE_SIZE << order, 0);
@@ -124,7 +163,7 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 		if (count == phconf->max_pages) {
 			/* Report isolated pages to the hypervisor */
 			phconf->report(phconf, count);
-
+			vm_exits += 1;
 			/* Return processed pages back to the buddy */
 			return_isolated_page(zone, phconf);
 
@@ -141,6 +180,7 @@ static void scan_zone_bitmap(struct page_reporting_config *phconf,
 	if (count) {
 		sg_mark_end(&phconf->sg[count - 1]);
 		phconf->report(phconf, count);
+		vm_exits += 1;
 
 		return_isolated_page(zone, phconf);
 	}
@@ -161,6 +201,13 @@ static void page_reporting_wq(struct work_struct *work)
 	int free_pages;
 
 	for_each_populated_zone(zone) {
+		if (sys_init_cnt == 0) {
+			int err = sysfs_create_group(mm_kobj, &hinting_attr_group);
+
+			if (err)
+				pr_err("hinting: register sysfs failed\n");
+			sys_init_cnt = 1;
+		}
 		/*
 		 * A newly enqueued/ongoing job will be canceled before
 		 * the rcu protected zone_reporting_bitmap pointer
