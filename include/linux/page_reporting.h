@@ -56,6 +56,14 @@ enum page_reporting_flags {
 };
 
 void __page_reporting_enqueue(struct page *page);
+void __page_reporting_dequeue(struct page *page);
+
+static inline void page_reporting_dequeue(struct page *page, int order)
+{
+	if (order < PAGE_REPORTING_MIN_ORDER)
+		return;
+	__page_reporting_dequeue(page);
+}
 
 /**
  * page_reporting_enqueue - checks the eligibility of the freed page based on

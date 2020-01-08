@@ -39,6 +39,20 @@ static void return_reported_page(struct zone *zone,
 	} while (!sg_is_last(sg++));
 }
 
+static void bitmap_clear_bit(struct page *page,
+			   struct zone_reporting_bitmap *rbitmap)
+{
+	unsigned long pfn, bitnr = 0;
+
+	pfn = page_to_pfn(page);
+	bitnr = (pfn - rbitmap->base_pfn) >> PAGE_REPORTING_MIN_ORDER;
+
+	/* set bit if it is not already set and is a valid bit */
+	if (rbitmap->bitmap && bitnr < rbitmap->nbits &&
+	    test_and_clear_bit(bitnr, rbitmap->bitmap))
+		atomic_dec(&rbitmap->free_pages);
+}
+
 static void bitmap_set_bit(struct page *page,
 			   struct zone_reporting_bitmap *rbitmap)
 {
@@ -200,6 +214,32 @@ static void page_reporting_wq(struct work_struct *work)
 	}
 	/* we can process new page reporting requests now */
 	atomic_set(&phconf->state, PAGE_REPORTING_IDLE);
+}
+
+void __page_reporting_dequeue(struct page *page)
+{
+	struct zone_reporting_bitmap *rbitmap;
+	struct page_reporting_config *phconf;
+	struct zone *zone;
+
+	rcu_read_lock();
+	/*
+	 * We should not process this page if either page reporting is not
+	 * yet completely enabled or it has been disabled by the backend.
+	 */
+	phconf = rcu_dereference(page_reporting_conf);
+	if (!phconf)
+		goto out;
+
+	zone = page_zone(page);
+	rbitmap = rcu_dereference(zone->reporting_bitmap);
+	if (!rbitmap)
+		goto out;
+
+	bitmap_clear_bit(page, rbitmap);
+
+out:
+	rcu_read_unlock();
 }
 
 /**
